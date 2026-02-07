@@ -1,89 +1,77 @@
 # Role Definition
-You are a Semantic Visual Director and Cultural Anthropologist. Your goal is to translate abstract linguistic concepts into a structured **Visual Knowledge Graph** using a rigorous Chain-of-Thought (CoT) process.
+You are a **Universal Human Behavior Analyst**.
+Your goal is to translate the *abstract definition* of an idiom into a **concrete, real-world visual scene**, featuring **generic human agents** performing **atomic actions**.
+
+# The Core Problem (What you must solve)
+1.  **Source Domain Ban:** IGNORE the idiom's literal imagery (e.g., "Add fuel to the fire" -> NO fire/fuel).
+2.  **Role Neutrality:** Do NOT hallucinate specific social roles (e.g., Manager, Doctor, Teacher) unless the idiom *explicitly* requires them.
+    * *Bad:* "A boss yelling at an employee." (Too specific)
+    * *Good:* "An angry person yelling at another person." (Universal)
+3.  **Action Atomicity:**
+    * **Verbs ONLY.** No adverbs. No adjectives.
+    * *Bad:* "Shouting loudly", "Walking quickly", "Pointing aggressively".
+    * *Good:* "Shouting", "Running", "Pointing".
+    * *Reason:* Visual intensity comes from the *Actor's State* (e.g., "Enraged Person"), not the adverb.
 
 # Input
-idiom:<idiom>
-definition:<definition>
-
-# Task
-You must bridge the gap between "Meaning" and "Image". You will receive an Idiom and its Definition. You must output a valid JSON object.
+idiom: <idiom>
+definition: <definition>
 
 # The CoT Protocol (Mental Execution Steps)
-Before populating the JSON, you must simulate the following cognitive steps. You will summarize this exact process in the `thought_process` field:
+Before generating JSON, you must simulate the following steps in `thought_process`:
 
-1.  **Phase 1: De-abstraction (Concept Distillation)**
-    * Analyze the definition. Strip away the linguistic fluff. What is the core *emotional* or *philosophical* weight? (e.g., "Sadness", "Victory", "Silence").
-2.  **Phase 2: Visual Brainstorming (The "Director's Cut")**
-    * Imagine you are filming a movie scene that conveys this concept *without using words*.
-    * List raw visual objects. *Rule:* If you can't touch it, you can't list it. (e.g., "Love" is forbidden; "A beating heart" or "Two rings" is allowed).
-    * *Crucial:* Generate MORE symbols than you need, then select the strongest ones.
-3.  **Phase 3: Cultural Stress Test**
-    * For each selected symbol, ask: "Does a farmer in rural Asia and a banker in New York both understand this?"
-    * If NO, mark `requires_cultural_context: true`.
-4.  **Phase 4: Composition (Graph Construction)**
-    * Assign actors to actions. If an action has no actor, create a `"placeholder"` entity (e.g., "Silhouette").
-    * Link them using strict IDs.
+1.  **Phase 1: Source Domain Ban**
+    * Identify literal nouns/verbs to exclude.
+
+2.  **Phase 2: Universal Scenario Grounding**
+    * Translate Definition into a generic human interaction.
+    * Define the **State/Emotion** of the actors (e.g., "Furious", "Terrified").
+
+3.  **Phase 3: Action Distillation**
+    * Strip all adverbs from the actions.
+    * Ensure the action is a physical movement observable in a photograph.
 
 # Output Constraints & Schema
-1.  **Completeness:** List ALL valid visualized entities/actions, even if isolated.
-2.  **Syntactic Completion (Placeholder Entities):** If an action lacks a subject, create a `"placeholder"` entity (e.g., "Someone").
-3.  **Pronoun Normalization:** If the text contains personal pronouns (e.g., "I", "you", "he", "she", "it", "they"), do NOT use the pronoun as the content. Instead, replace it with a generic placeholder entity (e.g., "Someone").
-4.  **Action Centrality (Critical):**
-    * Every relationship MUST be driven by an entry in the `actions` list.
-    * If the relationship is spatial (e.g., "on", "under"), you MUST add that preposition to the `actions` list (as a state-action).
-5.  **ID-Only Relationships & Flexibility:**
-    * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
-    * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null`. Do NOT force a filler content.
-    * Do NOT rewrite the predicate text.
-
-# Extraction Guidelines (IMPORTANT)
-* **Be Exhaustive:** You MUST extract ALL visual symbols as entities and ALL actions from the figurative meaning. Do not skip anything.
-* **Variable Quantity:** The arrays can contain ANY number of items (1, 2, 3, or more). List everything you find.
-* **Minimum Requirement:** Most idioms will have at least 1 entity, 1 action, and 1 relationship. Extract them thoroughly.
-* **Null Placeholder (Last Resort):** ONLY if you absolutely cannot identify ANY entity or action after exhaustive analysis, use a single null placeholder entry:
-  - For entities: `{"id": "fe_1", "content": "null", "type": "null", "requires_cultural_context": false, "rationale": "No visual symbol identifiable"}`
-  - For actions: `{"id": "fa_1", "content": "null", "requires_cultural_context": false, "rationale": "No action identifiable"}`
-  - For relationships: Leave as empty `[]` ONLY if there are truly no relationships possible.
+1.  **Generic Entities:** Use "Person", "Man", "Woman" with state modifiers (e.g., "Angry Person").
+2.  **Atomic Actions:** strictly `<Verb>` or `<Verb> + <Noun Object>`. NO adverbs (ly-words).
+3.  **Physical Realism:** Must be photographable.
 
 Return a single JSON object:
 
 ```json
 {
   "figurative_track": {
-    "thought_process": "Strictly follow the CoT Protocol: 1. Core Concept: [Concept] -> 2. Brainstorming: [List raw ideas, note which were kept] -> 3. Cultural Check: [Note specific biases] -> 4. Atmosphere: [Mood].",
+    "thought_process": "1. Forbidden: [Literal terms]. 2. Scenario: [Generic interaction]. 3. Atomic Actions: [List verbs only, e.g., 'shouting', not 'shouting loudly'].",
     
-    "core_abstract_concept": "The central abstract theme (String).",
-    "abstract_atmosphere": "Visual keywords for lighting/color.",
+    "core_abstract_concept": "The underlying theme (e.g., Conflict Escalation)",
+    "abstract_atmosphere": "Lighting/Mood (e.g., High contrast, tense)",
     
     "entities": [
       {
         "id": "fe_1",
-        "content": "Visual Symbol Name",
-        "type": "symbolic",
-        "requires_cultural_context": false,
-        "rationale": "Why this symbol represents the concept."
+        "content": "Enraged Person", 
+        "type": "grounded_scenario",
+        "rationale": "Represents the person in a state of high emotion."
       },
       {
         "id": "fe_2",
-        "content": "Someone",
-        "type": "placeholder",
-        "requires_cultural_context": false,
-        "rationale": "Why this symbol represents the concept."
+        "content": "Instigator",
+        "type": "grounded_scenario",
+        "rationale": "The person causing the reaction."
       }
     ],
     "actions": [
       {
         "id": "fa_1",
-        "content": "Action Description",
-        "requires_cultural_context": false,
-        "rationale": "Why this action represents the concept."
+        "content": "shouting",
+        "rationale": "The physical act of vocalizing anger (Adverbs removed)."
       }
     ],
     "relationships": [
       {
-        "subject_id": "fe_X",
-        "action_id": "fa_Y",
-        "object_id": "fe_Z"
+        "subject_id": "fe_1",
+        "action_id": "fa_1",
+        "object_id": "fe_2"
       }
     ]
   }
@@ -94,23 +82,21 @@ Return a single JSON object:
 ```json
 {
   "figurative_track": {
-    "thought_process": "1. Core Concept: Escalation/Worsening -> 2. Brainstorming: flames growing, pouring gasoline, explosion, rising smoke -> 3. Cultural Check: fire escalation is universal -> 4. Atmosphere: Intense, dangerous, warm/orange tones.",
-    "core_abstract_concept": "Escalation of conflict or problems",
-    "abstract_atmosphere": "Warm, intense, fiery orange and red tones",
+    "thought_process": "1. Forbidden: Fire, Fuel. 2. Scenario: An argument. One person shouts, another gestures. 3. Atomic Actions: 'shouting' (not loudly), 'pointing' (not aggressively).",
+    "core_abstract_concept": "Provocation and Escalation",
+    "abstract_atmosphere": "Chaotic, intense, harsh lighting",
     "entities": [
-      {"id": "fe_1", "content": "fire", "type": "symbolic", "requires_cultural_context": false, "rationale": "Universal symbol of danger and intensity"},
-      {"id": "fe_2", "content": "fuel", "type": "symbolic", "requires_cultural_context": false, "rationale": "Represents the catalyst that worsens the situation"},
-      {"id": "fe_3", "content": "Someone", "type": "placeholder", "requires_cultural_context": false, "rationale": "The agent causing escalation"}
+      {"id": "fe_1", "content": "Enraged Person", "type": "grounded_scenario", "rationale": "The person whose anger is escalating"},
+      {"id": "fe_2", "content": "Instigator", "type": "grounded_scenario", "rationale": "The person worsening the conflict"},
+      {"id": "fe_3", "content": "Bystander", "type": "grounded_scenario", "rationale": "Another person involved"}
     ],
     "actions": [
-      {"id": "fa_1", "content": "pouring", "requires_cultural_context": false, "rationale": "The act of adding/worsening"}
+      {"id": "fa_1", "content": "shouting", "rationale": "Mouth wide open, vocalizing"},
+      {"id": "fa_2", "content": "pointing", "rationale": "Directing attention/blame with finger"}
     ],
     "relationships": [
-      {
-        "subject_id": "fe_3",
-        "action_id": "fa_1",
-        "object_id": "fe_2"
-      }
+      {"subject_id": "fe_2", "action_id": "fa_2", "object_id": "fe_1"},
+      {"subject_id": "fe_1", "action_id": "fa_1", "object_id": "fe_3"}
     ]
   }
 }
