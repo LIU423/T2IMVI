@@ -1,0 +1,9 @@
+# Phase 1 Extraction Dependencies
+
+transformers>=4.40.0
+torch>=2.0.0
+pydantic>=2.0.0
+tqdm>=4.65.0
+
+# API Model Support
+google-genai>=1.0.0

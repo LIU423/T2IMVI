@@ -1,0 +1,40 @@
+# T2IMVI Reliability Analysis - Requirements
+# 
+# This package uses mostly Python standard library modules.
+# The following are optional dependencies for enhanced functionality.
+
+# Core dependencies (all from standard library - no installation needed):
+# - dataclasses (Python 3.7+)
+# - pathlib (Python 3.4+)
+# - json (built-in)
+# - logging (built-in)
+# - statistics (Python 3.4+)
+# - typing (Python 3.5+)
+# - argparse (built-in)
+# - ast (built-in)
+# - datetime (built-in)
+# - re (built-in)
+
+# No external dependencies required for basic functionality.
+# The package is designed to work with Python 3.7+ standard library only.
+
+# =============================================================================
+# OPTIONAL DEPENDENCIES (uncomment if needed)
+# =============================================================================
+
+# For parallel processing (can speed up large-scale experiments):
+# joblib>=1.0.0
+
+# For progress bars (visual feedback during long runs):
+# tqdm>=4.0.0
+
+# For advanced statistical analysis:
+# numpy>=1.19.0
+# scipy>=1.5.0
+
+# For generating plots/visualizations:
+# matplotlib>=3.3.0
+# seaborn>=0.11.0
+
+# For exporting results to different formats:
+# pandas>=1.2.0
