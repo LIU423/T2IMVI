@@ -90,9 +90,9 @@ Examples:
     parser.add_argument(
         "--device", "-d",
         type=str,
-        default="cuda",
+        default="auto",
         choices=["cuda", "cpu", "auto"],
-        help="Device to run model on (default: cuda). Use 'auto' for multi-GPU offload.",
+        help="Device to run model on (default: auto). Use 'auto' for multi-GPU offload.",
     )
     
     parser.add_argument(
