@@ -1,0 +1,125 @@
+"""
+Figurative Track Schema - Pydantic models for structured output validation.
+
+Based on phase1_figurative_extraction_specialist.txt prompt requirements.
+Enforces strict JSON schema compliance for LLM outputs.
+"""
+
+from typing import Literal, List
+from pydantic import BaseModel, Field
+
+
+class FigurativeEntity(BaseModel):
+    """Entity representing a visual symbol for the figurative meaning."""
+    
+    id: str = Field(
+        ...,
+        pattern=r"^fe_\d+$",
+        description="Unique identifier in format 'fe_X' where X is a number"
+    )
+    content: str = Field(
+        ...,
+        min_length=1,
+        description="Visual symbol name"
+    )
+    type: Literal["symbolic", "placeholder"] = Field(
+        ...,
+        description="symbolic for visual symbols, placeholder for implied agents"
+    )
+    requires_cultural_context: bool = Field(
+        ...,
+        description="Whether this symbol requires cultural context to understand"
+    )
+    rationale: str = Field(
+        ...,
+        min_length=1,
+        description="Why this symbol represents the concept"
+    )
+
+
+class FigurativeAction(BaseModel):
+    """Action in the figurative scene."""
+    
+    id: str = Field(
+        ...,
+        pattern=r"^fa_\d+$",
+        description="Unique identifier in format 'fa_X' where X is a number"
+    )
+    content: str = Field(
+        ...,
+        min_length=1,
+        description="Action description"
+    )
+    requires_cultural_context: bool = Field(
+        ...,
+        description="Whether this action requires cultural context"
+    )
+    rationale: str = Field(
+        ...,
+        min_length=1,
+        description="Why this action represents the concept"
+    )
+
+
+class FigurativeRelationship(BaseModel):
+    """Relationship linking subject, action, and object via IDs."""
+    
+    subject_id: str = Field(
+        ...,
+        pattern=r"^fe_\d+$",
+        description="Entity ID of the subject"
+    )
+    action_id: str = Field(
+        ...,
+        pattern=r"^fa_\d+$",
+        description="Action ID reference - MUST match an ID from actions list"
+    )
+    object_id: str = Field(
+        ...,
+        pattern=r"^fe_\d+$",
+        description="Entity ID of the object"
+    )
+
+
+class FigurativeTrack(BaseModel):
+    """Complete figurative visual knowledge graph for an idiom."""
+    
+    thought_process: str = Field(
+        ...,
+        min_length=10,
+        description="CoT reasoning: Core Concept -> Brainstorming -> Cultural Check -> Atmosphere"
+    )
+    core_abstract_concept: str = Field(
+        ...,
+        min_length=1,
+        description="The central abstract theme"
+    )
+    abstract_atmosphere: str = Field(
+        ...,
+        min_length=1,
+        description="Visual keywords for lighting/color"
+    )
+    entities: List[FigurativeEntity] = Field(
+        ...,
+        min_length=1,
+        description="List of visual symbol entities"
+    )
+    actions: List[FigurativeAction] = Field(
+        ...,
+        min_length=1,
+        description="List of actions in the scene"
+    )
+    relationships: List[FigurativeRelationship] = Field(
+        ...,
+        min_length=1,
+        description="Relationships linking entities via actions"
+    )
+
+
+class FigurativeExtractionResult(BaseModel):
+    """Root model for figurative extraction output."""
+    
+    figurative_track: FigurativeTrack = Field(
+        ...,
+        description="The complete figurative visual knowledge graph"
+    )

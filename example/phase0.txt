@@ -1,0 +1,11 @@
+[ 
+...
+{
+    "idiom_id": 3,
+    "idiom": "add fuel to the fire",
+    "definition": "['To worsen a conflict between people', 'to inflame an already tense situation']"
+    "transparency":...
+    "imageability":<the imageability probability value of answering "yes">
+  },
+...
+]

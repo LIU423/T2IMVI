@@ -1,0 +1,20 @@
+{
+  "model_key": "qwen3_vl_2b_T2IMVI",
+  "score_field": "figurative_score",
+  "rbo_p": 0.9,
+  "timestamp": "2026-02-07T06:32:41.000762",
+  "aggregate_stats": {
+    "count": 1,
+    "total_images": 5,
+    "total_fig": 2,
+    "total_lit": 1,
+    "total_rand": 2,
+    "mean_rbo": 0.647335,
+    "std_rbo": 0.0,
+    "min_rbo": 0.647335,
+    "max_rbo": 0.647335,
+    "median_rbo": 0.647335,
+    "p25_rbo": 0.647335,
+    "p75_rbo": 0.647335
+  }
+}
