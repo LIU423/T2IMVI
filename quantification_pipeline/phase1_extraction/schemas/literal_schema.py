@@ -3,9 +3,12 @@ Literal Track Schema - Pydantic models for structured output validation.
 
 Based on phase1_literal_extraction_specialist.txt prompt requirements.
 Enforces strict JSON schema compliance for LLM outputs.
+
+Note: entities, actions, and relationships can be empty arrays.
+object_id in relationships can be null for intransitive actions.
 """
 
-from typing import Literal, List
+from typing import Literal, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -22,9 +25,9 @@ class LiteralEntity(BaseModel):
         min_length=1,
         description="Noun from text or implied agent"
     )
-    type: Literal["text_based", "placeholder"] = Field(
+    type: Literal["text_based", "placeholder", "null"] = Field(
         ...,
-        description="text_based for nouns from text, placeholder for implied agents"
+        description="text_based for nouns from text, placeholder for implied agents, null if empty"
     )
 
 
@@ -56,10 +59,10 @@ class LiteralRelationship(BaseModel):
         pattern=r"^la_\d+$",
         description="Action ID reference"
     )
-    object_id: str = Field(
-        ...,
+    object_id: Optional[str] = Field(
+        None,
         pattern=r"^le_\d+$",
-        description="Entity ID of the object (to whom/what)"
+        description="Entity ID of the object (to whom/what). Can be null for intransitive actions."
     )
 
 
@@ -67,19 +70,16 @@ class LiteralTrack(BaseModel):
     """Complete literal scene graph for an idiom."""
     
     entities: List[LiteralEntity] = Field(
-        ...,
-        min_length=1,
-        description="List of entities extracted from idiom"
+        default_factory=list,
+        description="List of entities extracted from idiom. Can be empty if no entities found."
     )
     actions: List[LiteralAction] = Field(
-        ...,
-        min_length=1,
-        description="List of actions/verbs/prepositions"
+        default_factory=list,
+        description="List of actions/verbs/prepositions. Can be empty if no actions found."
     )
     relationships: List[LiteralRelationship] = Field(
-        ...,
-        min_length=1,
-        description="Relationships linking entities via actions"
+        default_factory=list,
+        description="Relationships linking entities via actions. Can be empty if no relationships found."
     )
 
 

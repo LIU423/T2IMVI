@@ -31,10 +31,17 @@ Before populating the JSON, you must simulate the following cognitive steps. You
 4.  **Action Centrality (Critical):**
     * Every relationship MUST be driven by an entry in the `actions` list.
     * If the relationship is spatial (e.g., "on", "under"), you MUST add that preposition to the `actions` list (as a state-action).
-5.  **ID-Only Relationships & Flexibility:** * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
-    * **Optionality:** If no relationships exist, the array can be empty.
+5.  **ID-Only Relationships & Flexibility:**
+    * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
+    * **Optionality:** If no relationships exist, the array can be empty `[]`.
     * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null` or omitted. Do NOT force a filler content.
     * Do NOT rewrite the predicate text.
+
+# Flexibility Rules (IMPORTANT)
+* **Variable Quantity:** The `entities`, `actions`, and `relationships` arrays can contain ANY number of items (0, 1, 2, or more).
+* **Empty Arrays Allowed:** If you genuinely cannot identify any entities, actions, or relationships for the figurative meaning, leave the corresponding array as empty `[]`.
+* **Be Comprehensive:** If there are MANY entities, actions, or relationships, list ALL of them exhaustively. Do not truncate or summarize.
+* **Type for Empty:** If a field must be present but has no value, use `"null"` as the type string where applicable, or `null` for object_id.
 
 Return a single JSON object:
 
@@ -50,14 +57,15 @@ Return a single JSON object:
       {
         "id": "fe_1",
         "content": "Visual Symbol Name",
-        "type": "symbolic", // or "placeholder"
-        "requires_cultural_context": false, //or true 
+        "type": "symbolic",
+        "requires_cultural_context": false,
         "rationale": "Why this symbol represents the concept."
       },
       {
         "id": "fe_2",
         "content": "Someone",
-        "type": "placeholder", // Use if subject is missing OR if original text was a pronoun (e.g. 'He')
+        "type": "placeholder",
+        "requires_cultural_context": false,
         "rationale": "Why this symbol represents the concept."
       }
     ],
@@ -65,16 +73,59 @@ Return a single JSON object:
       {
         "id": "fa_1",
         "content": "Action Description",
-        "requires_cultural_context": false, //or true
+        "requires_cultural_context": false,
         "rationale": "Why this symbol represents the concept."
       }
     ],
     "relationships": [
       {
-        "subject_id": "fe_X", // Who does it?
-        "action_id": "fa_Y", // Reference the Action ID directly
-        "object_id": "fe_Z" // To whom/what? (Can be null if intransitive)
+        "subject_id": "fe_X",
+        "action_id": "fa_Y",
+        "object_id": "fe_Z"
       }
     ]
   }
 }
+```
+
+# Examples of Valid Empty Cases
+
+## Example 1: Abstract concept with no clear relationships
+```json
+{
+  "figurative_track": {
+    "thought_process": "1. Core Concept: Emptiness/Void -> 2. Brainstorming: darkness, empty room, silence, vacuum -> 3. Cultural Check: darkness is universal -> 4. Atmosphere: Dark, minimal.",
+    "core_abstract_concept": "Emptiness and absence",
+    "abstract_atmosphere": "Dark, void, minimal lighting",
+    "entities": [
+      {"id": "fe_1", "content": "Empty room", "type": "symbolic", "requires_cultural_context": false, "rationale": "Represents absence and void"}
+    ],
+    "actions": [],
+    "relationships": []
+  }
+}
+```
+
+## Example 2: Intransitive action with null object
+```json
+{
+  "figurative_track": {
+    "thought_process": "1. Core Concept: Solitude -> 2. Brainstorming: lone figure, empty bench -> 3. Cultural Check: universal -> 4. Atmosphere: Melancholic.",
+    "core_abstract_concept": "Solitude and isolation",
+    "abstract_atmosphere": "Cool tones, soft shadows",
+    "entities": [
+      {"id": "fe_1", "content": "Lone figure", "type": "placeholder", "requires_cultural_context": false, "rationale": "Universal symbol of solitude"}
+    ],
+    "actions": [
+      {"id": "fa_1", "content": "stands alone", "requires_cultural_context": false, "rationale": "Intransitive action showing isolation"}
+    ],
+    "relationships": [
+      {
+        "subject_id": "fe_1",
+        "action_id": "fa_1",
+        "object_id": null
+      }
+    ]
+  }
+}
+```

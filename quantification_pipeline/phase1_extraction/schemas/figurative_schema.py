@@ -3,9 +3,12 @@ Figurative Track Schema - Pydantic models for structured output validation.
 
 Based on phase1_figurative_extraction_specialist.txt prompt requirements.
 Enforces strict JSON schema compliance for LLM outputs.
+
+Note: entities, actions, and relationships can be empty arrays.
+object_id in relationships can be null for intransitive actions.
 """
 
-from typing import Literal, List
+from typing import Literal, List, Optional
 from pydantic import BaseModel, Field
 
 
@@ -22,9 +25,9 @@ class FigurativeEntity(BaseModel):
         min_length=1,
         description="Visual symbol name"
     )
-    type: Literal["symbolic", "placeholder"] = Field(
+    type: Literal["symbolic", "placeholder", "null"] = Field(
         ...,
-        description="symbolic for visual symbols, placeholder for implied agents"
+        description="symbolic for visual symbols, placeholder for implied agents, null if empty"
     )
     requires_cultural_context: bool = Field(
         ...,
@@ -74,10 +77,10 @@ class FigurativeRelationship(BaseModel):
         pattern=r"^fa_\d+$",
         description="Action ID reference - MUST match an ID from actions list"
     )
-    object_id: str = Field(
-        ...,
+    object_id: Optional[str] = Field(
+        None,
         pattern=r"^fe_\d+$",
-        description="Entity ID of the object"
+        description="Entity ID of the object. Can be null for intransitive actions."
     )
 
 
@@ -100,19 +103,16 @@ class FigurativeTrack(BaseModel):
         description="Visual keywords for lighting/color"
     )
     entities: List[FigurativeEntity] = Field(
-        ...,
-        min_length=1,
-        description="List of visual symbol entities"
+        default_factory=list,
+        description="List of visual symbol entities. Can be empty if no entities found."
     )
     actions: List[FigurativeAction] = Field(
-        ...,
-        min_length=1,
-        description="List of actions in the scene"
+        default_factory=list,
+        description="List of actions in the scene. Can be empty if no actions found."
     )
     relationships: List[FigurativeRelationship] = Field(
-        ...,
-        min_length=1,
-        description="Relationships linking entities via actions"
+        default_factory=list,
+        description="Relationships linking entities via actions. Can be empty if no relationships found."
     )
 
 

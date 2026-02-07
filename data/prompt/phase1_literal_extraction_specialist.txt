@@ -14,10 +14,17 @@ Deconstruct the idiom into explicit words and inferred implicit agents. Map thei
 4.  **Action Centrality (Critical):**
     * Every relationship MUST be driven by an entry in the `actions` list.
     * If the relationship is spatial (e.g., "on", "under"), you MUST add that preposition to the `actions` list (as a state-action).
-5.  **ID-Only Relationships & Flexibility:** * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
-    * **Optionality:** If no relationships exist, the array can be empty.
+5.  **ID-Only Relationships & Flexibility:**
+    * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
+    * **Optionality:** If no relationships exist, the array can be empty `[]`.
     * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null` or omitted. Do NOT force a filler content.
     * Do NOT rewrite the predicate text.
+
+# Flexibility Rules (IMPORTANT)
+* **Variable Quantity:** The `entities`, `actions`, and `relationships` arrays can contain ANY number of items (0, 1, 2, or more).
+* **Empty Arrays Allowed:** If you genuinely cannot identify any entities, actions, or relationships from the idiom text, leave the corresponding array as empty `[]`.
+* **Be Comprehensive:** If there are MANY entities, actions, or relationships, list ALL of them exhaustively. Do not truncate or summarize.
+* **Type for Empty:** If a field must be present but has no value, use `"null"` as the type string where applicable, or `null` for object_id.
 
 # Output Schema (JSON)
 Return a single JSON object.
@@ -34,7 +41,7 @@ Return a single JSON object.
       {
         "id": "le_2",
         "content": "Implied Agent",
-        "type": "placeholder" // Use if subject is missing
+        "type": "placeholder"
       }
     ],
     "actions": [
@@ -45,10 +52,49 @@ Return a single JSON object.
     ],
     "relationships": [
       {
-        "subject_id": "le_2",   // Who does it?
-        "action_id": "la_1",    // Reference the Action ID directly
-        "object_id": "le_1"     // To whom/what? (Can be null if intransitive)
+        "subject_id": "le_2",
+        "action_id": "la_1",
+        "object_id": "le_1"
       }
     ]
   }
 }
+```
+
+# Examples of Valid Empty Cases
+
+## Example 1: No relationships (intransitive idiom)
+```json
+{
+  "literal_track": {
+    "entities": [
+      {"id": "le_1", "content": "rain", "type": "text_based"}
+    ],
+    "actions": [
+      {"id": "la_1", "content": "falls"}
+    ],
+    "relationships": []
+  }
+}
+```
+
+## Example 2: Intransitive action with null object
+```json
+{
+  "literal_track": {
+    "entities": [
+      {"id": "le_1", "content": "Someone", "type": "placeholder"}
+    ],
+    "actions": [
+      {"id": "la_1", "content": "sleeps"}
+    ],
+    "relationships": [
+      {
+        "subject_id": "le_1",
+        "action_id": "la_1",
+        "object_id": null
+      }
+    ]
+  }
+}
+```
