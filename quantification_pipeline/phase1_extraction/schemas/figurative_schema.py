@@ -4,7 +4,8 @@ Figurative Track Schema - Pydantic models for structured output validation.
 Based on phase1_figurative_extraction_specialist.txt prompt requirements.
 Enforces strict JSON schema compliance for LLM outputs.
 
-Note: entities, actions, and relationships can be empty arrays.
+Note: entities and actions require at least 1 item (use null placeholder if truly nothing found).
+relationships can be empty for intransitive actions.
 object_id in relationships can be null for intransitive actions.
 """
 
@@ -103,16 +104,18 @@ class FigurativeTrack(BaseModel):
         description="Visual keywords for lighting/color"
     )
     entities: List[FigurativeEntity] = Field(
-        default_factory=list,
-        description="List of visual symbol entities. Can be empty if no entities found."
+        ...,
+        min_length=1,
+        description="List of visual symbol entities. Use null placeholder if truly nothing found."
     )
     actions: List[FigurativeAction] = Field(
-        default_factory=list,
-        description="List of actions in the scene. Can be empty if no actions found."
+        ...,
+        min_length=1,
+        description="List of actions in the scene. Use null placeholder if truly nothing found."
     )
     relationships: List[FigurativeRelationship] = Field(
         default_factory=list,
-        description="Relationships linking entities via actions. Can be empty if no relationships found."
+        description="Relationships linking entities via actions. Can be empty for intransitive actions."
     )
 
 

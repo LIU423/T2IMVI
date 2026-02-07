@@ -16,15 +16,17 @@ Deconstruct the idiom into explicit words and inferred implicit agents. Map thei
     * If the relationship is spatial (e.g., "on", "under"), you MUST add that preposition to the `actions` list (as a state-action).
 5.  **ID-Only Relationships & Flexibility:**
     * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
-    * **Optionality:** If no relationships exist, the array can be empty `[]`.
-    * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null` or omitted. Do NOT force a filler content.
+    * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null`. Do NOT force a filler content.
     * Do NOT rewrite the predicate text.
 
-# Flexibility Rules (IMPORTANT)
-* **Variable Quantity:** The `entities`, `actions`, and `relationships` arrays can contain ANY number of items (0, 1, 2, or more).
-* **Empty Arrays Allowed:** If you genuinely cannot identify any entities, actions, or relationships from the idiom text, leave the corresponding array as empty `[]`.
-* **Be Comprehensive:** If there are MANY entities, actions, or relationships, list ALL of them exhaustively. Do not truncate or summarize.
-* **Type for Empty:** If a field must be present but has no value, use `"null"` as the type string where applicable, or `null` for object_id.
+# Extraction Guidelines (IMPORTANT)
+* **Be Exhaustive:** You MUST extract ALL nouns as entities and ALL verbs/prepositions as actions from the idiom text. Do not skip any words.
+* **Variable Quantity:** The arrays can contain ANY number of items (1, 2, 3, or more). List everything you find.
+* **Minimum Requirement:** Most idioms will have at least 1 entity, 1 action, and 1 relationship. Extract them thoroughly.
+* **Null Placeholder (Last Resort):** ONLY if you absolutely cannot identify ANY entity or action after exhaustive analysis, use a single null placeholder entry:
+  - For entities: `{"id": "le_1", "content": "null", "type": "null"}`
+  - For actions: `{"id": "la_1", "content": "null"}`
+  - For relationships: Leave as empty `[]` ONLY if there are truly no relationships possible.
 
 # Output Schema (JSON)
 Return a single JSON object.
@@ -61,24 +63,29 @@ Return a single JSON object.
 }
 ```
 
-# Examples of Valid Empty Cases
-
-## Example 1: No relationships (intransitive idiom)
+# Example: "a little bird told me"
 ```json
 {
   "literal_track": {
     "entities": [
-      {"id": "le_1", "content": "rain", "type": "text_based"}
+      {"id": "le_1", "content": "bird", "type": "text_based"},
+      {"id": "le_2", "content": "Someone", "type": "placeholder"}
     ],
     "actions": [
-      {"id": "la_1", "content": "falls"}
+      {"id": "la_1", "content": "told"}
     ],
-    "relationships": []
+    "relationships": [
+      {
+        "subject_id": "le_1",
+        "action_id": "la_1",
+        "object_id": "le_2"
+      }
+    ]
   }
 }
 ```
 
-## Example 2: Intransitive action with null object
+# Example: Intransitive action with null object
 ```json
 {
   "literal_track": {
