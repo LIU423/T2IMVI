@@ -195,10 +195,11 @@ class UnifiedPhase0Evaluator:
             trust_remote_code=True,
         )
         
+        device_map = "auto" if self.device == "auto" else self.device
         self._model = AutoModelForCausalLM.from_pretrained(
             model_class.MODEL_ID,
             torch_dtype=torch.float16,
-            device_map=self.device,
+            device_map=device_map,
             trust_remote_code=True,
         ).eval()
         
@@ -433,8 +434,8 @@ def parse_args() -> argparse.Namespace:
         "--device",
         type=str,
         default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to run model on (default: cuda).",
+        choices=["cuda", "cpu", "auto"],
+        help="Device to run model on (default: cuda). Use 'auto' for multi-GPU offload.",
     )
     
     parser.add_argument(
