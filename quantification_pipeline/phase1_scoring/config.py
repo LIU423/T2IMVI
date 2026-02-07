@@ -67,6 +67,8 @@ def get_model_class(model_name: str) -> Type:
     """
     MODEL_REGISTRY = {
         "qwen3-vl-2b": ("qwen_vl_model", "Qwen3VLModel"),
+        "qwen3-vl-32b-instruct": ("qwen_vl_model", "Qwen3VL32BInstructModel"),
+        "qwen3-vl-30b-a3b-instruct": ("qwen_vl_model", "Qwen3VL30BA3BModel"),
         # Add new models here:
         # "llava-7b": ("llava_model", "LlavaModel"),
         # "internvl-2b": ("internvl_model", "InternVLModel"),
@@ -86,7 +88,7 @@ def get_model_class(model_name: str) -> Type:
 
 def get_available_models() -> List[str]:
     """Get list of available model names."""
-    return ["qwen3-vl-2b"]
+    return ["qwen3-vl-2b", "qwen3-vl-32b-instruct", "qwen3-vl-30b-a3b-instruct"]
 
 
 # ============================================================================
@@ -99,7 +101,7 @@ class ScoringConfig:
     
     # Model settings
     model_name: str = "qwen3-vl-2b"
-    device: str = "cuda"
+    device: str = "cuda"  # "cuda", "cpu", "auto" (multi-GPU offload)
     torch_dtype: str = "float16"  # "float16", "float32", "bfloat16"
     
     # Processing settings

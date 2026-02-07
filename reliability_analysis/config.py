@@ -81,6 +81,12 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         description="Qwen3 Vision-Language 2B model with T2IMVI strategy",
         score_field="figurative_score",
     ),
+    "qwen3_vl_30b_a3b_instruct_T2IMVI": ModelConfig(
+        name="Qwen3-VL-30B-A3B-Instruct T2IMVI",
+        strategy_id="qwen3_vl_30b_a3b_instruct_T2IMVI",
+        description="Qwen3-VL-30B-A3B-Instruct model with T2IMVI strategy",
+        score_field="figurative_score",
+    ),
     
     # -------------------------------------------------------------------------
     # PLACEHOLDER MODELS - UNCOMMENT AND MODIFY AS NEEDED

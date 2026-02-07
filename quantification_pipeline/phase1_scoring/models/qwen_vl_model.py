@@ -1,10 +1,13 @@
 """
-Qwen3-VL-2B-Instruct model implementation for visual element verification.
+Qwen3-VL model implementations for visual element verification.
 
 This module implements the BaseVerifierModel interface for the
-Qwen3-VL-2B-Instruct Vision-Language model from Hugging Face.
+Qwen3-VL family of Vision-Language models from Hugging Face.
 
-Model: https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct
+Models:
+  - https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct
+  - https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct
+  - https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct
 """
 
 import math
@@ -52,6 +55,8 @@ class Qwen3VLModel(BaseVerifierModel):
         # Token sequences for "yes" and "no" (may be multi-token)
         self._yes_token_ids: Optional[List[int]] = None
         self._no_token_ids: Optional[List[int]] = None
+        self._yes_lower_ids: Optional[List[int]] = None
+        self._no_lower_ids: Optional[List[int]] = None
         
     @property
     def model_name(self) -> str:
@@ -134,20 +139,20 @@ class Qwen3VLModel(BaseVerifierModel):
         print(f"  'No' tokenizes to {len(self._no_token_ids)} token(s): {self._no_token_ids}")
         print(f"  'yes' tokenizes to {len(self._yes_lower_ids)} token(s): {self._yes_lower_ids}")
         print(f"  'no' tokenizes to {len(self._no_lower_ids)} token(s): {self._no_lower_ids}")
-    
+
     def _get_token_ids(self, word: str) -> List[int]:
         """
         Get complete token ID sequence for a word.
-        
+
         Args:
             word: The word to tokenize (e.g., "Yes", "No").
-            
+
         Returns:
             List of token IDs representing the complete word.
         """
         ids = self._processor.tokenizer.encode(word, add_special_tokens=False)
         return ids
-    
+
     def unload(self) -> None:
         """Unload model from memory."""
         if self._model is not None:
@@ -158,14 +163,14 @@ class Qwen3VLModel(BaseVerifierModel):
             self._processor = None
         torch.cuda.empty_cache()
         print("Model unloaded.")
-    
+
     def _load_image(self, image: Union[Image.Image, Path, str]) -> Image.Image:
         """
         Load image from various sources.
-        
+
         Args:
             image: PIL Image, path, or URL
-            
+
         Returns:
             PIL Image in RGB format
         """
@@ -183,7 +188,7 @@ class Qwen3VLModel(BaseVerifierModel):
                 return Image.open(BytesIO(response.content)).convert("RGB")
         else:
             raise ValueError(f"Unsupported image type: {type(image)}")
-    
+
     def format_figurative_prompt(
         self,
         content: str,
@@ -192,15 +197,15 @@ class Qwen3VLModel(BaseVerifierModel):
     ) -> str:
         """
         Format prompt for figurative element verification.
-        
+
         The prompt follows the phase1_figurative_verifier_specialist template.
         """
         # Replace placeholders in system prompt
         formatted_prompt = system_prompt.replace("<content>", content)
         formatted_prompt = formatted_prompt.replace("<rationale>", rationale)
-        
+
         return formatted_prompt
-    
+
     def format_literal_prompt(
         self,
         content: str,
@@ -208,14 +213,14 @@ class Qwen3VLModel(BaseVerifierModel):
     ) -> str:
         """
         Format prompt for literal element verification.
-        
+
         The prompt follows the phase1_literal_verifier_specialist template.
         """
         # Replace placeholder in system prompt
         formatted_prompt = system_prompt.replace("<content>", content)
-        
+
         return formatted_prompt
-    
+
     @torch.no_grad()
     def get_yes_no_probs(
         self,
@@ -224,19 +229,19 @@ class Qwen3VLModel(BaseVerifierModel):
     ) -> LogitResult:
         """
         Compute probabilities for generating "yes" or "no" given image and prompt.
-        
+
         Uses the VQAScore methodology: extract P("Yes"|image, question) as the
         alignment/verification score.
-        
+
         This method handles multi-token sequences correctly by computing:
             P(sequence) = ∏ P(token_i | prompt + tokens_0..i-1)
         """
         if not self.is_loaded:
             raise RuntimeError("Model not loaded. Call load() first.")
-        
+
         # Load image
         pil_image = self._load_image(image)
-        
+
         # Prepare messages for Qwen3-VL format
         messages = [
             {
@@ -247,7 +252,7 @@ class Qwen3VLModel(BaseVerifierModel):
                 ],
             }
         ]
-        
+
         # Apply chat template
         inputs = self._processor.apply_chat_template(
             messages,
@@ -257,7 +262,7 @@ class Qwen3VLModel(BaseVerifierModel):
             return_tensors="pt",
         )
         inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        
+
         # Generate with scores - we only need the first token
         # Using max_new_tokens=1 since we want single Yes/No token probability
         output = self._model.generate(
@@ -267,12 +272,12 @@ class Qwen3VLModel(BaseVerifierModel):
             return_dict_in_generate=True,
             do_sample=False,  # Greedy for reproducibility
         )
-        
+
         # Get logits for the first generated token
         # output.scores is a tuple of tensors, one per generated token
         # Each tensor has shape (batch_size, vocab_size)
         first_token_logits = output.scores[0][0]  # Shape: (vocab_size,)
-        
+
         # Get logits for Yes/No tokens (use first token of each sequence)
         # We check both uppercase and lowercase variants
         yes_logit = max(
@@ -283,24 +288,24 @@ class Qwen3VLModel(BaseVerifierModel):
             first_token_logits[self._no_token_ids[0]].item(),
             first_token_logits[self._no_lower_ids[0]].item()
         )
-        
+
         # Normalize using softmax over just yes/no
         # P(yes) = exp(yes_logit) / (exp(yes_logit) + exp(no_logit))
         max_logit = max(yes_logit, no_logit)
         yes_exp = math.exp(yes_logit - max_logit)
         no_exp = math.exp(no_logit - max_logit)
         total = yes_exp + no_exp
-        
+
         yes_prob = yes_exp / total
         no_prob = no_exp / total
-        
+
         return LogitResult(
             yes_logit=yes_logit,
             no_logit=no_logit,
             yes_prob=yes_prob,
             no_prob=no_prob,
         )
-    
+
     @torch.no_grad()
     def get_yes_no_probs_full_sequence(
         self,
@@ -309,16 +314,16 @@ class Qwen3VLModel(BaseVerifierModel):
     ) -> LogitResult:
         """
         Alternative method: compute full sequence probabilities for multi-token yes/no.
-        
+
         This is more accurate but slower. Use get_yes_no_probs() for single-token
         approximation which is usually sufficient.
         """
         if not self.is_loaded:
             raise RuntimeError("Model not loaded. Call load() first.")
-        
+
         # Load image
         pil_image = self._load_image(image)
-        
+
         # Prepare messages
         messages = [
             {
@@ -329,7 +334,7 @@ class Qwen3VLModel(BaseVerifierModel):
                 ],
             }
         ]
-        
+
         # Apply chat template
         inputs = self._processor.apply_chat_template(
             messages,
@@ -339,29 +344,29 @@ class Qwen3VLModel(BaseVerifierModel):
             return_tensors="pt",
         )
         inputs = {k: v.to(self._model.device) for k, v in inputs.items()}
-        
+
         # Compute log probability for "Yes" sequence
         yes_log_prob, yes_logits = self._compute_sequence_log_prob(inputs, self._yes_token_ids)
-        
+
         # Compute log probability for "No" sequence
         no_log_prob, no_logits = self._compute_sequence_log_prob(inputs, self._no_token_ids)
-        
+
         # Normalize using softmax
         max_log_prob = max(yes_log_prob, no_log_prob)
         yes_exp = math.exp(yes_log_prob - max_log_prob)
         no_exp = math.exp(no_log_prob - max_log_prob)
         total = yes_exp + no_exp
-        
+
         yes_prob = yes_exp / total
         no_prob = no_exp / total
-        
+
         return LogitResult(
             yes_logit=yes_logits[0] if yes_logits else 0.0,
             no_logit=no_logits[0] if no_logits else 0.0,
             yes_prob=yes_prob,
             no_prob=no_prob,
         )
-    
+
     @torch.no_grad()
     def _compute_sequence_log_prob(
         self,
@@ -370,29 +375,29 @@ class Qwen3VLModel(BaseVerifierModel):
     ) -> tuple:
         """
         Compute log probability of generating a specific token sequence.
-        
+
         Args:
             inputs: Tokenized inputs dictionary
             target_token_ids: List of token IDs to compute probability for
-            
+
         Returns:
             Tuple of (total_log_prob, list_of_logits_for_each_token)
         """
         import torch.nn.functional as F
-        
+
         total_log_prob = 0.0
         logits_list = []
-        
+
         # Clone inputs for iteration
         current_input_ids = inputs["input_ids"].clone()
         current_attention_mask = inputs.get("attention_mask")
         if current_attention_mask is not None:
             current_attention_mask = current_attention_mask.clone()
-        
+
         # Handle pixel_values for vision input
         pixel_values = inputs.get("pixel_values")
         image_grid_thw = inputs.get("image_grid_thw")
-        
+
         for i, target_tid in enumerate(target_token_ids):
             # Forward pass
             model_inputs = {"input_ids": current_input_ids}
@@ -402,27 +407,39 @@ class Qwen3VLModel(BaseVerifierModel):
                 model_inputs["pixel_values"] = pixel_values
             if image_grid_thw is not None and i == 0:
                 model_inputs["image_grid_thw"] = image_grid_thw
-            
+
             outputs = self._model(**model_inputs)
-            
+
             # Get logits at the last position
             last_logits = outputs.logits[0, -1, :]
-            
+
             # Get the logit for the target token
             target_logit = last_logits[target_tid].item()
             logits_list.append(target_logit)
-            
+
             # Convert to log probability
             log_probs = F.log_softmax(last_logits, dim=0)
             token_log_prob = log_probs[target_tid].item()
             total_log_prob += token_log_prob
-            
+
             # Append target token for next iteration
             next_token = torch.tensor([[target_tid]], device=self._model.device)
             current_input_ids = torch.cat([current_input_ids, next_token], dim=1)
-            
+
             if current_attention_mask is not None:
                 next_mask = torch.ones((1, 1), device=self._model.device, dtype=current_attention_mask.dtype)
                 current_attention_mask = torch.cat([current_attention_mask, next_mask], dim=1)
-        
+
         return total_log_prob, logits_list
+
+
+class Qwen3VL30BA3BModel(Qwen3VLModel):
+    """Qwen3-VL-30B-A3B-Instruct model variant."""
+    
+    MODEL_ID = "Qwen/Qwen3-VL-30B-A3B-Instruct"
+
+
+class Qwen3VL32BInstructModel(Qwen3VLModel):
+    """Qwen3-VL-32B-Instruct model variant."""
+
+    MODEL_ID = "Qwen/Qwen3-VL-32B-Instruct"

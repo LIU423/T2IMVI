@@ -67,7 +67,7 @@ OUTPUT_PHASE1_EXTRACTION_CHECKPOINTS_DIR = OUTPUT_PHASE1_EXTRACTION_DIR / "check
 
 # Reliability analysis directory
 RELIABILITY_ANALYSIS_DIR = PROJECT_ROOT / "reliability_analysis"
-RELIABILITY_ANALYSIS_RESULTS_DIR = RELIABILITY_ANALYSIS_DIR / "results"
+RELIABILITY_ANALYSIS_RESULTS_DIR = DATA_DIR / "reliability_analysis" / "results"
 
 # Quantification pipeline directory
 QUANTIFICATION_PIPELINE_DIR = PROJECT_ROOT / "quantification_pipeline"

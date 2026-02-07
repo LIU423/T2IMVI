@@ -10,6 +10,8 @@ data/input/*
 !data/input/.gitkeep.md
 data/output/*
 !data/output/.gitkeep.md
+data/reliability_analysis/*
+!data/reliability_analysis/.gitkeep.md
 
 # -----------------------------------------------------------------------------
 # Python

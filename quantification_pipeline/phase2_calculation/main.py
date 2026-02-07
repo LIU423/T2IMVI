@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 import traceback
 from typing import List, Optional
@@ -88,9 +89,9 @@ Examples:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to run model on (default: cuda)",
+        default="auto",
+        choices=["cuda", "cpu", "auto"],
+        help="Device to run model on (default: auto)",
     )
     
     # Checkpoint
@@ -146,6 +147,16 @@ def main() -> int:
     Returns:
         Exit code (0 for success, 1 for error)
     """
+    # Enable HF download progress/logging and apply conservative timeouts/cache.
+    # Only set defaults if user hasn't configured them already.
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "info")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
+    os.environ.setdefault("HF_HUB_TIMEOUT", "60")
+    os.environ.setdefault("HF_HOME", "/tmp/hf")
+    os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/hf")
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/tmp/hf")
+
     args = parse_args()
     
     # Setup logging

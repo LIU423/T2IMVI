@@ -72,6 +72,13 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "output_prefix": "qwen3_vl_2b",
         "description": "Qwen3-VL-2B-Instruct Vision-Language Model",
     },
+    "qwen3-vl-30b-a3b-instruct": {
+        "model_id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
+        "class": "Qwen3VLModel",
+        "module": "quantification_pipeline.phase2_calculation.models.qwen_vl_model",
+        "output_prefix": "qwen3_vl_30b_a3b_instruct",
+        "description": "Qwen3-30B-A3B-Instruct Vision-Language Model",
+    },
     # Add more models here for easy swapping
     # "llava-1.5": {
     #     "model_id": "llava-hf/llava-1.5-7b-hf",
@@ -256,7 +263,7 @@ class IUConfig:
     """
     model_key: str = DEFAULT_MODEL_KEY
     dataset: str = DATASET_NAME
-    device: str = "cuda"
+    device: str = "auto"
     batch_size: int = 1  # VLMs typically process one at a time
     checkpoint_interval: int = 10
     resume: bool = True

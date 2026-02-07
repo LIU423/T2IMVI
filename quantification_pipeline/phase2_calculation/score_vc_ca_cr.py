@@ -141,9 +141,29 @@ def process_image_dir(image_dir: Path) -> Tuple[bool, Optional[str]]:
         "CA": compute_ca(literal_track),
         "CR": compute_cr(literal_track),
     }
+    # Merge with existing scores (e.g., AEA) if present
+    figurative_score_path = image_dir / "figurative_score.json"
+    if figurative_score_path.exists():
+        try:
+            existing = load_json(figurative_score_path)
+            if isinstance(existing, dict):
+                existing.update(figurative_score)
+                figurative_score = existing
+        except json.JSONDecodeError:
+            pass
 
-    write_json(image_dir / "figurative_score.json", figurative_score)
-    write_json(image_dir / "literal_score.json", literal_score)
+    literal_score_path = image_dir / "literal_score.json"
+    if literal_score_path.exists():
+        try:
+            existing = load_json(literal_score_path)
+            if isinstance(existing, dict):
+                existing.update(literal_score)
+                literal_score = existing
+        except json.JSONDecodeError:
+            pass
+
+    write_json(figurative_score_path, figurative_score)
+    write_json(literal_score_path, literal_score)
 
     return True, None
 

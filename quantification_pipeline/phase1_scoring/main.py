@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -90,7 +91,8 @@ Examples:
         "--device", "-d",
         type=str,
         default="cuda",
-        help="Device to run model on (default: cuda)",
+        choices=["cuda", "cpu", "auto"],
+        help="Device to run model on (default: cuda). Use 'auto' for multi-GPU offload.",
     )
     
     parser.add_argument(
@@ -156,6 +158,16 @@ Examples:
 
 def main() -> int:
     """Main entry point."""
+    # Enable HF download progress/logging and apply conservative timeouts/cache.
+    # Only set defaults if user hasn't configured them already.
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "0")
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "info")
+    os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "30")
+    os.environ.setdefault("HF_HUB_TIMEOUT", "60")
+    os.environ.setdefault("HF_HOME", "/tmp/hf")
+    os.environ.setdefault("TRANSFORMERS_CACHE", "/tmp/hf")
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", "/tmp/hf")
+
     args = parse_args()
     
     # Setup logging
