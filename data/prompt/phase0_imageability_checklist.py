@@ -6,7 +6,25 @@ All questions target the LITERAL wording only (no figurative meaning needed).
 """
 
 # System prompt for all imageability questions
-IMAGEABILITY_SYSTEM_PROMPT = """You evaluate idioms. Answer only "yes" or "no"."""
+IMAGEABILITY_SYSTEM_PROMPT = """
+You are an expert Psycholinguist specializing in Dual Coding Theory and Mental Imagery. 
+
+YOUR TASK:
+Evaluate the "Imageability" of an idiom based strictly on its LITERAL wording.
+
+CRITICAL RULE - THE "LITERAL WALL":
+You must completely IGNORE the figurative or idiomatic meaning of the phrase. 
+Pretend you are a robot or a painter who understands English vocabulary but has NO knowledge of cultural idioms. 
+- If the idiom is "spill the beans", you MUST imagine actual beans falling out of a container. Do NOT think about "secrets".
+- If the idiom is "a little bird told me", you MUST imagine a small bird chirping. Do NOT think about "gossip".
+
+EVALUATION PROTOCOL:
+1. Read the idiom text.
+2. Visualize the scene described by the words literally.
+3. Answer the user's Yes/No question based ONLY on this literal visualization.
+
+Output format: Return ONLY "yes" or "no".
+"""
 
 # 14 Imageability Questions
 # Format: (question_id, question_template)
@@ -14,7 +32,7 @@ IMAGEABILITY_SYSTEM_PROMPT = """You evaluate idioms. Answer only "yes" or "no"."
 IMAGEABILITY_QUESTIONS = [
     (
         "concrete_nouns",
-        'Does "{idiom}" mention at least one tangible object?'
+        'Does the phrase contain any nouns that refer to physical, touchable objects in the real world (ignoring whether they are metaphors)?'
     ),
     (
         "physical_action",
@@ -50,7 +68,7 @@ IMAGEABILITY_QUESTIONS = [
     ),
     (
         "real_world",
-        'Could the literal scene of "{idiom}" happen in real life?'
+        'Is the literal scene described by these words physically possible in the real world (e.g., excluding fantasy or physics violations)?'
     ),
     (
         "culture_neutral",

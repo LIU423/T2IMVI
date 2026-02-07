@@ -14,7 +14,18 @@ from tqdm import tqdm
 
 # Add project root to path for centralized config import
 _THIS_DIR = Path(__file__).parent.resolve()
-_PROJECT_ROOT = _THIS_DIR.parent.parent.parent
+
+
+def _find_project_root(start: Path) -> Path:
+    """Walk up from start to find project_config.py."""
+    for parent in [start, *start.parents]:
+        if (parent / "project_config.py").is_file():
+            return parent
+    # Fallback: previous heuristic (repo root relative to this file)
+    return start.parent.parent.parent
+
+
+_PROJECT_ROOT = _find_project_root(_THIS_DIR)
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 

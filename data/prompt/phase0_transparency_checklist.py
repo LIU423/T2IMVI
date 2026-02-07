@@ -7,7 +7,24 @@ These questions consider BOTH the idiom AND its figurative meaning.
 """
 
 # System prompt for all transparency questions
-TRANSPARENCY_SYSTEM_PROMPT = """You evaluate idioms. Answer only "yes" or "no"."""
+TRANSPARENCY_SYSTEM_PROMPT = """
+You are a Cognitive Semantics Expert specializing in Idiom Decomposability and Transparency.
+
+YOUR TASK:
+Analyze the relationship between the LITERAL DEFINITION of the words and the FIGURATIVE MEANING of the idiom.
+
+CORE CONCEPTS:
+- Transparent (Decomposable): The figurative meaning can be distributed onto the literal parts (e.g., "break the ice" -> break=change situation, ice=social tension).
+- Opaque (Non-decomposable): The meaning is arbitrary and cannot be guessed from the words (e.g., "kick the bucket" -> bucket has no relation to death).
+
+EVALUATION PROTOCOL:
+1. Analyze the Literal Meaning (Clause L).
+2. Analyze the Figurative Meaning (Clause F).
+3. Determine if there is a logical, metaphorical, or metonymic bridge from L to F.
+4. Answer the user's Yes/No question based on this connection.
+
+Output format: Return ONLY "yes" or "no".
+"""
 
 # 15 Transparency Questions
 # Format: (question_id, question_template)
@@ -15,7 +32,7 @@ TRANSPARENCY_SYSTEM_PROMPT = """You evaluate idioms. Answer only "yes" or "no"."
 TRANSPARENCY_QUESTIONS = [
     (
         "literal_hints_figurative",
-        'Does imagining "{idiom}" literally hint at its meaning: "{meaning}"?'
+        'If a learner only knew the literal definitions of the words in "{idiom}", would the literal image provide a strong visual clue to the meaning "{meaning}"?'
     ),
     (
         "everyday_word_sense",

@@ -448,22 +448,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="qwen3-0.6b",
+        default="qwen3-0.6b", # qwen3-30b-a3b-instruct-2507
         help="Model to use (default: qwen3-0.6b).",
     )
     
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default="auto",
         choices=["cuda", "cpu", "auto"],
-        help="Device to run model on (default: cuda).",
+        help="Device to run model on (default: auto).",
     )
     
     parser.add_argument(
         "--save-interval",
         type=int,
-        default=10,
+        default=5,
         help="Save checkpoint every N items (default: 10).",
     )
     
