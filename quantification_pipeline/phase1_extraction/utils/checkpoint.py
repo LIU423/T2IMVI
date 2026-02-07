@@ -37,10 +37,12 @@ class CheckpointState:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to JSON-serializable dict."""
+        # Ensure failed_ids keys are strings for JSON compatibility
+        failed_ids_str = {str(k): v for k, v in self.failed_ids.items()}
         return {
             "track_type": self.track_type,
             "processed_ids": list(self.processed_ids),
-            "failed_ids": self.failed_ids,
+            "failed_ids": failed_ids_str,
             "started_at": self.started_at,
             "last_updated": self.last_updated,
             "total_count": self.total_count,
@@ -49,10 +51,14 @@ class CheckpointState:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CheckpointState":
         """Create from dict."""
+        # Convert string keys in failed_ids back to int
+        raw_failed = data.get("failed_ids", {})
+        failed_ids = {int(k): v for k, v in raw_failed.items()}
+        
         return cls(
             track_type=data.get("track_type", ""),
             processed_ids=set(data.get("processed_ids", [])),
-            failed_ids=data.get("failed_ids", {}),
+            failed_ids=failed_ids,
             started_at=data.get("started_at", ""),
             last_updated=data.get("last_updated", ""),
             total_count=data.get("total_count", 0),
@@ -136,9 +142,12 @@ class CheckpointManager:
         """Mark an idiom as successfully processed."""
         self.state.processed_ids.add(idiom_id)
         
-        # Remove from failed if previously failed
+        # Remove from failed if previously failed (check both int and str keys)
+        str_id = str(idiom_id)
         if idiom_id in self.state.failed_ids:
             del self.state.failed_ids[idiom_id]
+        elif str_id in self.state.failed_ids:
+            del self.state.failed_ids[str_id]
         
         self.save()
     

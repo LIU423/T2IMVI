@@ -35,6 +35,11 @@ class FigurativeExtractor(BaseExtractor):
         super().__init__(model, prompt_template, output_dir)
         logger.info(f"FigurativeExtractor initialized. Output dir: {output_dir}")
     
+    @property
+    def track_type(self) -> str:
+        """Return the track type for this extractor."""
+        return "figurative"
+    
     def get_prompt(self, idiom_data: Dict[str, Any]) -> str:
         """
         Build prompt for figurative extraction.

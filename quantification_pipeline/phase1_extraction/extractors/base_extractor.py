@@ -18,6 +18,7 @@ class BaseExtractor(ABC):
     - extract(): Perform extraction for a single idiom
     - get_prompt(): Build prompt for the idiom
     - get_schema(): Return the Pydantic schema for validation
+    - track_type: Property returning the track type ("literal" or "figurative")
     """
     
     def __init__(
@@ -38,6 +39,12 @@ class BaseExtractor(ABC):
         self.prompt_template = prompt_template
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    @property
+    @abstractmethod
+    def track_type(self) -> str:
+        """Return the track type: 'literal' or 'figurative'."""
+        pass
     
     @abstractmethod
     def get_prompt(self, idiom_data: Dict[str, Any]) -> str:
@@ -72,6 +79,12 @@ class BaseExtractor(ABC):
         Returns:
             Validated Pydantic model instance
         """
+        idiom_id = idiom_data.get("idiom_id", 0)
+        
+        # Set extraction context for raw response logging (if model supports it)
+        if hasattr(self.model, 'set_extraction_context'):
+            self.model.set_extraction_context(idiom_id, self.track_type)
+        
         prompt = self.get_prompt(idiom_data)
         schema = self.get_schema()
         

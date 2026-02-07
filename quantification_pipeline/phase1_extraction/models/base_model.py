@@ -19,7 +19,7 @@ class ModelConfig:
     model_path: Optional[str] = None  # Local path or HuggingFace repo ID
     device: str = "auto"  # "auto", "cuda", "cpu", "cuda:0", etc.
     torch_dtype: str = "auto"  # "auto", "float16", "bfloat16", "float32"
-    max_new_tokens: int = 2048
+    max_new_tokens: int = 8192  # Increased from 2048 to prevent JSON truncation
     temperature: float = 0.7
     top_p: float = 0.9
     do_sample: bool = True

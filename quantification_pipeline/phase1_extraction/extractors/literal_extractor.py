@@ -35,6 +35,11 @@ class LiteralExtractor(BaseExtractor):
         super().__init__(model, prompt_template, output_dir)
         logger.info(f"LiteralExtractor initialized. Output dir: {output_dir}")
     
+    @property
+    def track_type(self) -> str:
+        """Return the track type for this extractor."""
+        return "literal"
+    
     def get_prompt(self, idiom_data: Dict[str, Any]) -> str:
         """
         Build prompt for literal extraction.
