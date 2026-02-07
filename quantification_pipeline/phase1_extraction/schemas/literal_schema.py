@@ -31,6 +31,11 @@ class LiteralEntity(BaseModel):
         ...,
         description="text_based for nouns from text, placeholder for implied agents, null if nothing identifiable"
     )
+    rationale: str = Field(
+        ...,
+        min_length=1,
+        description="Short rationale explaining why this entity is included"
+    )
 
 
 class LiteralAction(BaseModel):
@@ -45,6 +50,11 @@ class LiteralAction(BaseModel):
         ...,
         min_length=1,
         description="Verb or preposition from text, or 'null' if truly nothing found"
+    )
+    rationale: str = Field(
+        ...,
+        min_length=1,
+        description="Short rationale explaining why this action is included"
     )
 
 
@@ -71,6 +81,16 @@ class LiteralRelationship(BaseModel):
 class LiteralTrack(BaseModel):
     """Complete literal scene graph for an idiom."""
     
+    thought_process: str = Field(
+        ...,
+        min_length=10,
+        description="CoT-style summary: Grammar -> Props -> Anti-Metaphor -> Staging"
+    )
+    literal_staging_atmosphere: str = Field(
+        ...,
+        min_length=1,
+        description="Physical lighting/setting implied strictly by the words"
+    )
     entities: List[LiteralEntity] = Field(
         ...,
         min_length=1,

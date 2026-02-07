@@ -122,13 +122,15 @@ config = ModelConfig(
   "idiom_id": 3,
   "idiom": "add fuel to the fire",
   "literal_track": {
+    "thought_process": "1. Grammar: Verb 'add', Nouns 'fuel', 'fire' -> 2. Props: fuel, fire -> 3. Anti-Metaphor: physical adding only -> 4. Staging: an agent adding fuel to fire.",
+    "literal_staging_atmosphere": "A fire with fuel being placed onto it.",
     "entities": [
-      {"id": "le_1", "content": "fuel", "type": "text_based"},
-      {"id": "le_2", "content": "fire", "type": "text_based"},
-      {"id": "le_3", "content": "Someone", "type": "placeholder"}
+      {"id": "le_1", "content": "fuel", "type": "text_based", "rationale": "Explicit noun in text"},
+      {"id": "le_2", "content": "fire", "type": "text_based", "rationale": "Explicit noun in text"},
+      {"id": "le_3", "content": "Someone", "type": "placeholder", "rationale": "Implied agent performing the action"}
     ],
     "actions": [
-      {"id": "la_1", "content": "add"}
+      {"id": "la_1", "content": "add", "rationale": "Explicit verb describing the interaction"}
     ],
     "relationships": [
       {"subject_id": "le_3", "action_id": "la_1", "object_id": "le_1"}

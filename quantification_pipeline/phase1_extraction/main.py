@@ -115,7 +115,7 @@ class ExtractionPipeline:
             config = ModelConfig(
                 model_name=model_path,
                 model_path=model_path,
-                max_new_tokens=2048,
+                max_new_tokens=8192,
                 temperature=0.7,
                 max_retries=3,
                 extra_kwargs={"api_key": api_key},
@@ -127,7 +127,7 @@ class ExtractionPipeline:
                 model_name=model_path.split("/")[-1] if "/" in model_path else model_path,
                 model_path=model_path,
                 device=device,
-                max_new_tokens=2048,
+                max_new_tokens=8192,
                 temperature=0.7,
                 max_retries=3,
             )

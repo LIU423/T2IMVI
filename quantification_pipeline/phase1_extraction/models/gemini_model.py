@@ -6,7 +6,7 @@ Compatible with the BaseExtractionModel interface.
 
 Features:
 - Native JSON mode (responseMimeType + responseJsonSchema)
-- Progressive retry strategy with error feedback
+- Single-attempt extraction (no retries)
 - Raw response logging for debugging
 - Fault-tolerant JSON extraction
 - Stop sequences support
@@ -76,7 +76,7 @@ class RawResponseLogger:
         Args:
             idiom_id: The idiom ID being processed
             track_type: "literal" or "figurative"
-            attempt: Attempt number (1, 2, or 3)
+            attempt: Attempt number (single attempt in current pipeline)
             prompt: The prompt sent to the model
             raw_response: The raw response from the model
             error: Optional error message if parsing failed
@@ -132,7 +132,7 @@ class GeminiModel(BaseExtractionModel):
     Features:
     - Google Gemini API integration
     - Native JSON mode (responseMimeType + responseJsonSchema) 
-    - Progressive retry strategy with error feedback
+    - Single-attempt extraction (no retries)
     - Fault-tolerant JSON extraction
     - Raw response logging for debugging
     - Stop sequences support (<END_JSON>)
@@ -272,11 +272,8 @@ class GeminiModel(BaseExtractionModel):
     ) -> BaseModel:
         """
         Generate and validate structured JSON output.
-        
-        Uses progressive retry strategy:
-        - Attempt 1: Normal prompt with JSON mode
-        - Attempt 2: Feed back error + first 200 chars of raw response
-        - Attempt 3: Shorter, stricter schema prompt
+
+        Single attempt only. On failure, log and raise so caller can skip.
         """
         if not self._is_loaded:
             self.load_model()
@@ -284,92 +281,98 @@ class GeminiModel(BaseExtractionModel):
         # Convert Pydantic schema to JSON schema for Gemini
         json_schema = self._pydantic_to_json_schema(response_schema)
         
-        last_error: Optional[Exception] = None
-        last_raw_response: str = ""
-        error_type: str = ""
-        current_prompt: str = prompt
-        
-        for attempt in range(1, self.config.max_retries + 1):
-            try:
-                # Build prompt based on attempt number
-                current_prompt = self._build_progressive_prompt(
-                    original_prompt=prompt,
-                    attempt=attempt,
-                    last_error=error_type,
-                    last_raw_response=last_raw_response,
-                    schema=response_schema,
-                )
-                
-                # Generate response (use native JSON mode for attempt 1)
-                use_json_mode = (attempt == 1) and self.use_native_json_mode
-                raw_response = self.generate(
-                    current_prompt,
-                    json_schema=json_schema if use_json_mode else None,
-                    use_json_mode=use_json_mode,
-                )
-                last_raw_response = raw_response
-                
-                logger.debug(f"Raw response (attempt {attempt}):\n{raw_response[:500] if raw_response else '(empty)'}...")
-                
-                # Save raw response for debugging
-                if self._current_idiom_id is not None:
-                    self.raw_logger.save_raw_response(
-                        idiom_id=self._current_idiom_id,
-                        track_type=self._current_track_type,
-                        attempt=attempt,
-                        prompt=current_prompt,
-                        raw_response=raw_response,
-                    )
-                
-                # Extract JSON from response
-                json_str, extraction_error = self._extract_json_robust(raw_response)
-                
-                if extraction_error:
-                    raise json.JSONDecodeError(extraction_error, raw_response if raw_response else "", 0)
-                
-                # Parse and validate
-                data = json.loads(json_str)
-                result = response_schema.model_validate(data)
-                
-                logger.info(f"Successfully parsed response on attempt {attempt}")
-                return result
-                
-            except json.JSONDecodeError as e:
-                last_error = e
-                error_type = self._classify_json_error(str(e), last_raw_response)
-                logger.warning(f"Parse attempt {attempt} failed ({error_type}): {e}")
-                
-                # Save error response for debugging
-                if self._current_idiom_id is not None:
-                    self.raw_logger.save_raw_response(
-                        idiom_id=self._current_idiom_id,
-                        track_type=self._current_track_type,
-                        attempt=attempt,
-                        prompt=current_prompt,
-                        raw_response=last_raw_response,
-                        error=f"{error_type}: {str(e)}",
-                    )
-                    
-            except ValidationError as e:
-                last_error = e
-                error_type = "schema_validation_failed"
-                logger.warning(f"Validation attempt {attempt} failed: {e}")
-                
-                # Save error response for debugging
-                if self._current_idiom_id is not None:
-                    self.raw_logger.save_raw_response(
-                        idiom_id=self._current_idiom_id,
-                        track_type=self._current_track_type,
-                        attempt=attempt,
-                        prompt=current_prompt,
-                        raw_response=last_raw_response,
-                        error=f"{error_type}: {str(e)}",
-                    )
-        
-        raise ValueError(
-            f"Failed to generate valid structured output after {self.config.max_retries} attempts. "
-            f"Last error: {last_error}"
+        # Build a single strict JSON prompt (no retries)
+        current_prompt = self._build_progressive_prompt(
+            original_prompt=prompt,
+            attempt=1,
+            last_error="",
+            last_raw_response="",
+            schema=response_schema,
         )
+
+        try:
+            # Generate response (use native JSON mode if enabled)
+            use_json_mode = self.use_native_json_mode
+            raw_response = self.generate(
+                current_prompt,
+                json_schema=json_schema if use_json_mode else None,
+                use_json_mode=use_json_mode,
+            )
+
+            logger.debug(
+                f"Raw response (attempt 1):\n{raw_response[:500] if raw_response else '(empty)'}..."
+            )
+
+            if raw_response:
+                root_key = self._get_single_root_key(response_schema)
+                if root_key and f"\"{root_key}\"" in raw_response and not raw_response.rstrip().endswith("}"):
+                    logger.warning(
+                        "Model response appears truncated before closing JSON."
+                    )
+
+            # Save raw response for debugging
+            if self._current_idiom_id is not None:
+                self.raw_logger.save_raw_response(
+                    idiom_id=self._current_idiom_id,
+                    track_type=self._current_track_type,
+                    attempt=1,
+                    prompt=current_prompt,
+                    raw_response=raw_response,
+                )
+
+            # Extract JSON from response
+            root_key = self._get_single_root_key(response_schema)
+            json_str, extraction_error = self._extract_json_robust(
+                raw_response,
+                required_root_key=root_key,
+            )
+
+            if extraction_error:
+                raise json.JSONDecodeError(
+                    extraction_error, raw_response if raw_response else "", 0
+                )
+
+            # Parse and validate
+            data = json.loads(json_str)
+            data = self._normalize_root_schema(data, response_schema)
+            result = response_schema.model_validate(data)
+
+            logger.info("Successfully parsed response on attempt 1")
+            return result
+
+        except json.JSONDecodeError as e:
+            error_type = self._classify_json_error(str(e), raw_response if raw_response else "")
+            logger.warning(f"Parse attempt 1 failed ({error_type}): {e}")
+
+            # Save error response for debugging
+            if self._current_idiom_id is not None:
+                self.raw_logger.save_raw_response(
+                    idiom_id=self._current_idiom_id,
+                    track_type=self._current_track_type,
+                    attempt=1,
+                    prompt=current_prompt,
+                    raw_response=raw_response if raw_response else "",
+                    error=f"{error_type}: {str(e)}",
+                )
+
+            raise
+
+        except ValidationError as e:
+            error_type = "schema_validation_failed"
+            logger.warning(f"Validation attempt 1 failed: {e}")
+
+            # Save error response for debugging
+            if self._current_idiom_id is not None:
+                self.raw_logger.save_raw_response(
+                    idiom_id=self._current_idiom_id,
+                    track_type=self._current_track_type,
+                    attempt=1,
+                    prompt=current_prompt,
+                    raw_response=raw_response if raw_response else "",
+                    error=f"{error_type}: {str(e)}",
+                )
+
+            raise
     
     def _build_progressive_prompt(
         self,
@@ -380,11 +383,10 @@ class GeminiModel(BaseExtractionModel):
         schema: Type[BaseModel],
     ) -> str:
         """
-        Build prompt based on attempt number (progressive retry strategy).
-        
-        Attempt 1: Normal prompt with JSON prefix
-        Attempt 2: Error feedback + first 200 chars of raw response
-        Attempt 3: Stricter schema prompt with null/[] fallbacks
+        Build prompt based on attempt number.
+
+        Note: The pipeline uses a single attempt (attempt=1). Other branches
+        remain for potential future use but are not exercised.
         """
         # Add JSON prefix to force format
         json_prefix = (
@@ -513,7 +515,11 @@ class GeminiModel(BaseExtractionModel):
         # Fallback: return first 100 chars
         return prompt[:100] + "..."
     
-    def _extract_json_robust(self, text: str) -> Tuple[str, Optional[str]]:
+    def _extract_json_robust(
+        self,
+        text: str,
+        required_root_key: Optional[str] = None,
+    ) -> Tuple[str, Optional[str]]:
         """
         Robust JSON extraction with multiple fallback strategies.
         
@@ -548,7 +554,10 @@ class GeminiModel(BaseExtractionModel):
             return repaired, None
         
         # Strategy 4: Extract any JSON-like substring
-        json_like = self._extract_json_substring(text)
+        json_like = self._extract_json_substring(
+            text,
+            required_root_key=required_root_key,
+        )
         if json_like and self._is_valid_json(json_like):
             return json_like, None
         
@@ -628,8 +637,15 @@ class GeminiModel(BaseExtractionModel):
         
         return candidate
     
-    def _extract_json_substring(self, text: str) -> Optional[str]:
+    def _extract_json_substring(
+        self,
+        text: str,
+        required_root_key: Optional[str] = None,
+    ) -> Optional[str]:
         """Extract any valid JSON object substring."""
+        require_root_key = bool(required_root_key and required_root_key in text)
+        preferred_candidate: Optional[str] = None
+
         # Try each { as a potential start
         start = 0
         while True:
@@ -646,12 +662,23 @@ class GeminiModel(BaseExtractionModel):
                 
                 candidate = text[start:end + 1]
                 if self._is_valid_json(candidate):
-                    return candidate
+                    if require_root_key:
+                        if f"\"{required_root_key}\"" in candidate:
+                            return candidate
+                        if preferred_candidate is None:
+                            preferred_candidate = candidate
+                    else:
+                        return candidate
                 end += 1
             
             start += 1
         
-        return None
+        if require_root_key:
+            # If the response mentioned the root key but no valid JSON contains it,
+            # avoid returning an unrelated inner object.
+            return None
+
+        return preferred_candidate
     
     def _is_valid_json(self, text: str) -> bool:
         """Check if text is valid JSON."""
@@ -668,6 +695,48 @@ class GeminiModel(BaseExtractionModel):
         except Exception as e:
             logger.warning(f"Failed to generate JSON schema: {e}")
             return {}
+
+    def _get_single_root_key(self, schema: Type[BaseModel]) -> Optional[str]:
+        """Return the single root key name if schema has exactly one field."""
+        try:
+            fields = getattr(schema, "model_fields", None)
+            if fields and len(fields) == 1:
+                return next(iter(fields.keys()))
+        except Exception:
+            return None
+
+        return None
+
+    def _normalize_root_schema(
+        self,
+        data: Any,
+        response_schema: Type[BaseModel],
+    ) -> Any:
+        """
+        Normalize model output to match a single-field root schema.
+
+        Some model responses omit the root key (e.g., return {"entities": ...}
+        instead of {"literal_track": {...}}). If the schema has exactly one
+        top-level field and it's missing, wrap the data under that field.
+        """
+        try:
+            fields = getattr(response_schema, "model_fields", None)
+            if not fields or not isinstance(data, dict):
+                return data
+
+            if len(fields) == 1:
+                root_key = next(iter(fields.keys()))
+                if root_key not in data:
+                    logger.warning(
+                        f"Missing root key '{root_key}' in response. "
+                        "Wrapping data under the root key."
+                    )
+                    return {root_key: data}
+        except Exception:
+            # Fall back to original data on any unexpected issues
+            return data
+
+        return data
     
     def unload(self) -> None:
         """Clean up Gemini client."""

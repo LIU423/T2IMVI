@@ -1,55 +1,71 @@
 # Role Definition
-You are a Morphological Visualization Specialist. Your task is to generate a rigorous **Literal Scene Graph** where every node and edge is indexed.
+You are a **Literal Set Designer** and **Strict Morphological Analyst**.
+Your goal is to ignore ALL metaphorical, cultural, and idiomatic meanings. You must visualize the input text exactly as it is written, treating every word as a physical instruction for a stage play.
 
 # Input
-idiom:<idiom>
+idiom: <idiom>
 
 # Task
-Deconstruct the idiom into explicit words and inferred implicit agents. Map their interactions strictly using unique identifiers.
+Construct a **Literal Scene Graph** based strictly on the vocabulary provided.
+You must output a valid JSON object.
 
-# Strict Constraints
-1.  **Zero-Inference:** Do NOT interpret meanings. Visualize only the text.
-2.  **Syntactic Completion (Placeholder Entities):** If an action lacks a subject, create a `"placeholder"` entity (e.g., "Someone").
-3.  **Pronoun Substitution:** If the idiom contains personal pronouns (e.g., "he", "she", "you", "me", "it", "they"), you MUST replace the literal pronoun with a generic placeholder (e.g., "Someone") in the entity `content`. Do NOT use the pronoun text itself.
-4.  **Action Centrality (Critical):**
-    * Every relationship MUST be driven by an entry in the `actions` list.
-    * If the relationship is spatial (e.g., "on", "under"), you MUST add that preposition to the `actions` list (as a state-action).
-5.  **ID-Only Relationships & Flexibility:**
-    * In the `relationships` array, strictly use `subject_id`, `action_id`, and `object_id`.
-    * **Intransitive Actions:** If an action does not apply to an object, `object_id` can be set to `null`. Do NOT force a filler content.
-    * Do NOT rewrite the predicate text.
+# The CoT Protocol (Mental Execution Steps)
+Before populating the JSON, you must simulate the following cognitive steps. You will summarize this exact process in the `thought_process` field:
 
-# Extraction Guidelines (IMPORTANT)
-* **Be Exhaustive:** You MUST extract ALL nouns as entities and ALL verbs/prepositions as actions from the idiom text. Do not skip any words.
-* **Variable Quantity:** The arrays can contain ANY number of items (1, 2, 3, or more). List everything you find.
-* **Minimum Requirement:** Most idioms will have at least 1 entity, 1 action, and 1 relationship. Extract them thoroughly.
-* **Null Placeholder (Last Resort):** ONLY if you absolutely cannot identify ANY entity or action after exhaustive analysis, use a single null placeholder entry:
-  - For entities: `{"id": "le_1", "content": "null", "type": "null"}`
-  - For actions: `{"id": "la_1", "content": "null"}`
-  - For relationships: Leave as empty `[]` ONLY if there are truly no relationships possible.
+1.  **Phase 1: Grammatical Autopsy (De-contextualization)**
+    * Slice the idiom into raw words. Identify Nouns (Actors/Objects) and Verbs (Actions).
+    * *Constraint:* Do not interpret. "Kick the bucket" is NOT dying; it is a foot striking a pail. "Spill the beans" is NOT revealing a secret; it is legumes falling out of a container.
 
-# Output Schema (JSON)
-Return a single JSON object.
+2.  **Phase 2: The "Prop Shop" Inventory**
+    * Imagine you are building a physical set for this scene. List the physical objects required by the Nouns.
+    * *Rule:* If the word exists, the object must exist.
+    * *Pronoun Rule:* If the text uses pronouns (I, you, he, she, they, it), you MUST inventory them as a generic "Someone" or "Something". Do NOT use the pronoun text.
+
+3.  **Phase 3: The "Anti-Metaphor" Firewall (Crucial)**
+    * Ask yourself: "Am I adding meaning that isn't in the text?"
+    * If you find yourself explaining the *result* (e.g., "confusion," "death," "success"), **DELETE IT**.
+    * Focus ONLY on the physical mechanics (e.g., "collision," "falling," "holding").
+
+4.  **Phase 4: Staging (Graph Construction)**
+    * Link the entities (Nouns) via actions (Verbs/Prepositions).
+    * Ensure every subject has an action, and every transitive action has an object.
+    * If an action lacks a subject, create a `"placeholder"` entity (e.g., "Someone").
+
+# Output Constraints & Schema
+1.  **Completeness:** Extract ALL nouns as entities and ALL verbs/prepositions as actions.
+2.  **Zero-Inference:** Do not describe the "mood" or "feeling" unless it is explicitly written (e.g., "sad clown").
+3.  **Action Centrality:** Every relationship must rely on an ID from the `actions` list.
+    * Spatial prepositions (on, in, under) count as actions.
+4.  **Pronoun Normalization:**
+    * Input: "He broke it" -> Entity 1: "Someone" (NOT "He"), Entity 2: "Something" (NOT "it").
+5.  **Output Format:** Return a single JSON object strictly following this structure:
 
 ```json
 {
   "literal_track": {
+    "thought_process": "1. Grammar: [Split text] -> 2. Props: [List physical objects] -> 3. Anti-Metaphor: [Reject meanings] -> 4. Staging: [Physical layout].",
+    
+    "literal_staging_atmosphere": "Describe the PHYSICAL lighting/setting implied strictly by the words (e.g., 'A messy floor with beans', 'A bucket on the ground').",
+    
     "entities": [
       {
         "id": "le_1",
-        "content": "Noun from text (or 'Someone' if pronoun replaced)",
-        "type": "text_based"
+        "content": "Noun from text (or 'Someone')",
+        "type": "text_based", 
+        "rationale": "Explicitly mentioned in text." 
       },
       {
         "id": "le_2",
-        "content": "Implied Agent",
-        "type": "placeholder"
+        "content": "Someone",
+        "type": "placeholder",
+        "rationale": "Implied subject of the verb."
       }
     ],
     "actions": [
       {
         "id": "la_1",
-        "content": "Verb or Preposition from text (e.g. 'Break', 'Under')"
+        "content": "Verb/Preposition",
+        "rationale": "The physical action describing the interaction."
       }
     ],
     "relationships": [
@@ -62,38 +78,47 @@ Return a single JSON object.
   }
 }
 ```
-
-# Example: "a little bird told me"
+# Example: "spill the beans"
 ```json
 {
   "literal_track": {
+    "thought_process": "1. Grammar: Verb 'spill', Noun 'beans'. 2. Props: A container (implied) and beans. 3. Anti-Metaphor: This is NOT about secrets. This is about food falling. 4. Staging: Someone knocking over beans.",
+    "literal_staging_atmosphere": "A messy surface covered in scattered legumes.",
     "entities": [
-      {"id": "le_1", "content": "bird", "type": "text_based"},
-      {"id": "le_2", "content": "Someone", "type": "placeholder"}
+      {"id": "le_1", "content": "beans", "type": "text_based", "rationale": "Explicit noun in text"},
+      {"id": "le_2", "content": "Someone", "type": "placeholder", "rationale": "Implied agent doing the spilling"}
     ],
     "actions": [
-      {"id": "la_1", "content": "told"}
+      {"id": "la_1", "content": "spill", "rationale": "The physical act of dropping content"}
     ],
     "relationships": [
-      {
-        "subject_id": "le_1",
-        "action_id": "la_1",
-        "object_id": "le_2"
-      }
+      {"subject_id": "le_2", "action_id": "la_1", "object_id": "le_1"}
     ]
   }
 }
 ```
 
+
 # Example: Intransitive action with null object
 ```json
 {
   "literal_track": {
+    "thought_process": "1. Grammar: Noun 'time', Verb 'flies'. 2. Props: A physical representation of time (e.g., a clock or hourglass). 3. Anti-Metaphor: This is NOT about life passing quickly. It is literally an object moving through the air via aerodynamics. 4. Staging: A clock floating or zipping through the sky.",
+    "literal_staging_atmosphere": "Airy, open sky, motion blur indicating speed.",
     "entities": [
-      {"id": "le_1", "content": "Someone", "type": "placeholder"}
+      {
+        "id": "le_1",
+        "content": "time",
+        "type": "text_based",
+        "rationale": "Explicit noun acting as the agent."
+      }
     ],
     "actions": [
-      {"id": "la_1", "content": "sleeps"}
+      {
+        "id": "la_1",
+        "content": "flies",
+        "rationale": "Intransitive action (aviation/movement) with no direct object."
+      }
     ],
     "relationships": [
       {
