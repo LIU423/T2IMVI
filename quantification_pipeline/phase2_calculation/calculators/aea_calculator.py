@@ -4,7 +4,7 @@ AEA (Abstract Element Alignment) Calculator.
 This module implements the AEA scoring logic that evaluates whether
 an image aligns with the abstract atmosphere description.
 
-Score = 1 - P("one")
+Score = 0.5 * P("two") + P("three")
 
 Where "one" indicates a clash between image and description.
 """
@@ -33,7 +33,7 @@ class AEACalculator:
     - "one" = clash (bad alignment)
     - "two" = neutral (acceptable)
     - "three" = strong match (good alignment)
-    - AEA Score = 1 - P("one")
+    - AEA Score = 0.5 * P("two") + P("three")
     
     Pre-filtering:
     - If all entity/action scores from Phase 1 are below threshold,
@@ -75,7 +75,7 @@ class AEACalculator:
             abstract_atmosphere: Abstract atmosphere description
             
         Returns:
-            AEA score (1 - P("one")), range [0, 1]
+            AEA score (0.5 * P("two") + P("three")), range [0, 1]
             Higher is better (less clash)
         """
         # Format prompt with the abstract_atmosphere
@@ -93,7 +93,7 @@ class AEACalculator:
             f"two={result.two_prob:.4f}, three={result.three_prob:.4f}"
         )
         
-        # AEA score = 1 - P("one")
+        # AEA score = 0.5 * P("two") + P("three")
         return result.aea_score
     
     def calculate_with_details(
@@ -140,7 +140,7 @@ class AEACalculator:
             image: Pre-loaded PIL Image
             
         Returns:
-            AEA score (0.0 if filtered out, otherwise 1 - P("one"))
+            AEA score (0.0 if filtered out, otherwise 0.5 * P("two") + P("three"))
         """
         # Check if there are any significant scores
         if not figurative_data.has_significant_scores(self.score_threshold):

@@ -17,7 +17,10 @@ from tqdm import tqdm
 
 from .config import IUConfig, MODEL_REGISTRY
 from .models.iu_base_model import BaseIUModel
-from .models.qwen_vl_iu_model import Qwen3VLIUModel
+from .models.qwen_vl_iu_model import (
+    Qwen3VLIUModel,
+    Qwen3VL30BA3BInstructIUModel,
+)
 from .calculators.iu_calculator import IUCalculator
 from .utils.checkpoint import CheckpointManager
 from .utils.data_handler import DataHandler, ImageInfo
@@ -28,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Model registry for IU (maps model_key to class)
 IU_MODEL_REGISTRY = {
     "qwen3-vl-2b": Qwen3VLIUModel,
-    # Add more models here
+    "qwen3-vl-30b-a3b-instruct": Qwen3VL30BA3BInstructIUModel,
 }
 
 

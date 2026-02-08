@@ -68,14 +68,14 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "qwen3-vl-2b": {
         "model_id": "Qwen/Qwen3-VL-2B-Instruct",
         "class": "Qwen3VLModel",
-        "module": "quantification_pipeline.phase2_calculation.models.qwen_vl_model",
+        "module": "quantification_pipeline.phase2_calculation.models.qwen_vl_aea_model",
         "output_prefix": "qwen3_vl_2b",
         "description": "Qwen3-VL-2B-Instruct Vision-Language Model",
     },
     "qwen3-vl-30b-a3b-instruct": {
         "model_id": "Qwen/Qwen3-VL-30B-A3B-Instruct",
         "class": "Qwen3VLModel",
-        "module": "quantification_pipeline.phase2_calculation.models.qwen_vl_model",
+        "module": "quantification_pipeline.phase2_calculation.models.qwen_vl_aea_model",
         "output_prefix": "qwen3_vl_30b_a3b_instruct",
         "description": "Qwen3-30B-A3B-Instruct Vision-Language Model",
     },
@@ -245,9 +245,9 @@ class IUConfig:
     """
     Configuration for IU (Image Understanding) calculation.
     
-    Uses VQAScore methodology: P("yes") from yes/no questions about
-    whether the image embodies the core abstract concept via relationships
-    or entity-action pairs.
+    Uses 3-level classification ("one", "two", "three") and computes
+    IU score as 0.5 * P("two") + P("three"), based on prompts over
+    relationships or entity-action pairs.
     
     Attributes:
         model_key: Key in MODEL_REGISTRY for the VLM to use

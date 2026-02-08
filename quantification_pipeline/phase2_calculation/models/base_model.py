@@ -19,7 +19,7 @@ class LogitResult:
     Result from logit extraction for multi-level scoring.
     
     For AEA, we use 3 levels: "one" (clash), "two" (neutral), "three" (match).
-    The AEA score is computed as: 1 - P("one")
+    The AEA score is computed as: 0.5 * P("two") + P("three")
     
     Attributes:
         one_logit: Raw logit for "one" token
@@ -39,12 +39,9 @@ class LogitResult:
     @property
     def aea_score(self) -> float:
         """
-        Compute AEA score as 1 - P("one").
-        
-        Following VQAScore methodology but adapted for 3-level output.
-        "one" indicates a clash, so 1 - P("one") gives alignment score.
+        Compute AEA score as 0.5 * P("two") + P("three").
         """
-        return 1.0 - self.one_prob
+        return 0.5 * self.two_prob + self.three_prob
 
 
 class BaseAEAModel(ABC):
@@ -131,7 +128,7 @@ class BaseAEAModel(ABC):
             system_prompt: System prompt template
             
         Returns:
-            AEA score (1 - P("one"))
+            AEA score (0.5 * P("two") + P("three"))
         """
         prompt = self.format_aea_prompt(abstract_atmosphere, system_prompt)
         result = self.get_level_probs(image, prompt)

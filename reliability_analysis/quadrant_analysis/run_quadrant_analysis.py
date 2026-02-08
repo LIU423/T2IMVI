@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
             "'--idiom-ids 1,2,3'. Omit to process all idioms."
         ),
     )
-    parser.add_argument("--transparency-threshold", type=float, default=0.7)
+    parser.add_argument("--transparency-threshold", type=float, default=0.5)
     parser.add_argument("--imageability-threshold", type=float, default=0.5)
     parser.add_argument("--rbo-p", type=float, default=DEFAULT_EXPERIMENT_CONFIG.rbo_p)
     parser.add_argument(

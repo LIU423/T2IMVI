@@ -98,9 +98,9 @@ Examples:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        choices=["cuda", "cpu"],
-        help="Device to run model on (default: cuda)",
+        default="auto",
+        choices=["cuda", "cpu", "auto"],
+        help="Device to run model on (default: auto)",
     )
     
     # Score threshold

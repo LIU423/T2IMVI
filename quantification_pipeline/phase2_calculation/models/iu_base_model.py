@@ -4,8 +4,12 @@ Abstract base class for IU (Image Understanding) models.
 This module defines the interface that all VLM implementations must follow
 for the Phase 2 IU calculation pipeline.
 
-IU uses VQAScore methodology: P("yes") from yes/no questions about
-whether the image embodies the core abstract concept.
+IU uses 3-level classification:
+- "one": mismatch
+- "two": partial/neutral match
+- "three": strong match
+
+IU score = 0.5 * P("two") + P("three")
 """
 
 from abc import ABC, abstractmethod
@@ -17,33 +21,31 @@ from PIL import Image
 
 
 @dataclass
-class YesNoLogitResult:
+class IULevelLogitResult:
     """
-    Result from yes/no logit extraction for VQAScore-style scoring.
-    
-    The IU score is P("yes") - the probability that the model answers "yes"
-    to whether the image embodies the concept.
+    Result from 3-level logit extraction for IU scoring.
     
     Attributes:
-        yes_logit: Raw logit for "yes" token
-        no_logit: Raw logit for "no" token
-        yes_prob: Normalized probability for "yes"
-        no_prob: Normalized probability for "no"
+        one_logit: Raw logit for "one" token
+        two_logit: Raw logit for "two" token
+        three_logit: Raw logit for "three" token
+        one_prob: Normalized probability for "one"
+        two_prob: Normalized probability for "two"
+        three_prob: Normalized probability for "three"
     """
-    yes_logit: float
-    no_logit: float
-    yes_prob: float
-    no_prob: float
+    one_logit: float
+    two_logit: float
+    three_logit: float
+    one_prob: float
+    two_prob: float
+    three_prob: float
     
     @property
     def iu_score(self) -> float:
         """
-        Compute IU score as P("yes").
-        
-        Following VQAScore methodology:
-        VQAScore(image, text) := P("Yes" | image, question(text))
+        Compute IU score as 0.5 * P("two") + P("three").
         """
-        return self.yes_prob
+        return 0.5 * self.two_prob + self.three_prob
 
 
 class BaseIUModel(ABC):
@@ -123,20 +125,20 @@ class BaseIUModel(ABC):
         pass
     
     @abstractmethod
-    def get_yes_no_probs(
+    def get_level_probs(
         self,
         image: Union[Image.Image, Path, str],
         prompt: str,
-    ) -> YesNoLogitResult:
+    ) -> IULevelLogitResult:
         """
-        Get probabilities for "yes" and "no" tokens.
+        Get probabilities for "one", "two", and "three" tokens.
         
         Args:
             image: Image to evaluate (PIL Image, path, or URL)
             prompt: Formatted IU prompt
             
         Returns:
-            YesNoLogitResult with probabilities for yes/no
+            IULevelLogitResult with probabilities for the three levels
         """
         pass
     
@@ -148,14 +150,15 @@ class BaseIUModel(ABC):
         """
         Compute IU score for an image-prompt pair.
         
-        This is a convenience method that extracts P("yes").
+        This is a convenience method that extracts level probabilities
+        and applies IU scoring.
         
         Args:
             image: Image to evaluate
             prompt: Formatted prompt
             
         Returns:
-            IU score (P("yes"))
+            IU score (0.5 * P("two") + P("three"))
         """
-        result = self.get_yes_no_probs(image, prompt)
+        result = self.get_level_probs(image, prompt)
         return result.iu_score

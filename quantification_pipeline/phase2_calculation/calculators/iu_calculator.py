@@ -6,7 +6,7 @@ an image embodies the core abstract concept through:
 1. Relationship-based evaluation (if relationship scores > threshold)
 2. Entity-action based evaluation (fallback when relationships invalid)
 
-Score = P("yes") using VQAScore methodology.
+Score = 0.5 * P("two") + P("three")
 """
 
 import logging
@@ -16,7 +16,7 @@ from typing import Union, Optional, List, Dict, Any, Tuple
 
 from PIL import Image
 
-from ..models.iu_base_model import BaseIUModel, YesNoLogitResult
+from ..models.iu_base_model import BaseIUModel
 from ..utils.data_handler import ImageInfo, FigurativeData
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ class IUEvaluationResult:
     Complete result of IU evaluation for an image.
     
     Attributes:
-        iu_score: The final IU score (P("yes") or 0.0)
+        iu_score: The final IU score (0.5 * P("two") + P("three"), or 0.0)
         mode: "relationships", "entity_action", or "zero"
         prompt_used: The prompt that was used for evaluation
         details: Additional details about the evaluation
@@ -102,7 +102,7 @@ class IUCalculator:
     3. If NO relationships are valid:
        a. If NO entities OR NO actions have score > threshold: Return 0.0
        b. Otherwise: Use highest-scoring entity + action with without_relationships prompt
-    4. Score = P("yes") from VQAScore methodology
+    4. Score = 0.5 * P("two") + P("three")
     """
     
     def __init__(
@@ -283,11 +283,11 @@ class IUCalculator:
         
         Logic:
         1. Check for valid relationships (all components score > threshold)
-        2. If valid relationship found: Use relationships prompt -> P("yes")
+        2. If valid relationship found: Use relationships prompt -> level probabilities
         3. If no valid relationships:
            a. Check if any entities AND any actions have score > threshold
            b. If not: Return 0.0
-           c. If yes: Use best entity + action with without_relationships prompt -> P("yes")
+           c. If yes: Use best entity + action with without_relationships prompt -> level probabilities
         
         Args:
             image: Image to evaluate
@@ -320,10 +320,11 @@ class IUCalculator:
                 system_prompt=self.relationships_prompt_template,
             )
             
-            result = self.model.get_yes_no_probs(image, prompt)
+            result = self.model.get_level_probs(image, prompt)
             
             logger.debug(
-                f"Relationships mode: P(yes)={result.yes_prob:.4f}, P(no)={result.no_prob:.4f}"
+                f"Relationships mode: P(one)={result.one_prob:.4f}, "
+                f"P(two)={result.two_prob:.4f}, P(three)={result.three_prob:.4f}"
             )
             
             return IUEvaluationResult(
@@ -334,8 +335,9 @@ class IUCalculator:
                     "subject": valid_relationship.subject_content,
                     "action": valid_relationship.action_content,
                     "object": valid_relationship.object_content,
-                    "yes_prob": result.yes_prob,
-                    "no_prob": result.no_prob,
+                    "one_prob": result.one_prob,
+                    "two_prob": result.two_prob,
+                    "three_prob": result.three_prob,
                 },
             )
         
@@ -366,10 +368,11 @@ class IUCalculator:
             system_prompt=self.without_relationships_prompt_template,
         )
         
-        result = self.model.get_yes_no_probs(image, prompt)
+        result = self.model.get_level_probs(image, prompt)
         
         logger.debug(
-            f"Entity-action mode: P(yes)={result.yes_prob:.4f}, P(no)={result.no_prob:.4f}"
+            f"Entity-action mode: P(one)={result.one_prob:.4f}, "
+            f"P(two)={result.two_prob:.4f}, P(three)={result.three_prob:.4f}"
         )
         
         return IUEvaluationResult(
@@ -381,8 +384,9 @@ class IUCalculator:
                 "action": selection.action_content,
                 "entity_score": selection.entity_score,
                 "action_score": selection.action_score,
-                "yes_prob": result.yes_prob,
-                "no_prob": result.no_prob,
+                "one_prob": result.one_prob,
+                "two_prob": result.two_prob,
+                "three_prob": result.three_prob,
             },
         )
     
@@ -403,7 +407,7 @@ class IUCalculator:
             image: Pre-loaded PIL Image
             
         Returns:
-            IU score (P("yes") or 0.0)
+            IU score (0.5 * P("two") + P("three"), or 0.0)
         """
         result = self.calculate(image, figurative_data)
         

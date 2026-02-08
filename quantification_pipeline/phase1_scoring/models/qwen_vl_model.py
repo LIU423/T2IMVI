@@ -18,6 +18,10 @@ import torch
 from PIL import Image
 
 from .base_model import BaseVerifierModel, LogitResult
+from quantification_pipeline.qwen3_vl_loader import (
+    get_qwen3_vl_generation_model_class,
+    is_qwen3_vl_moe_model,
+)
 
 
 class Qwen3VLModel(BaseVerifierModel):
@@ -72,57 +76,78 @@ class Qwen3VLModel(BaseVerifierModel):
             return
             
         print(f"Loading model: {self._model_id}")
-        
-        from transformers import (
-            Qwen3VLForConditionalGeneration,
-            Qwen3VLProcessor,
-            Qwen3VLVideoProcessor,
-            AutoTokenizer,
-            AutoImageProcessor,
-        )
-        
-        # Manually load tokenizer, image_processor, and video_processor separately
-        # to bypass video processor auto-detection issues in transformers 5.x
-        # The AutoProcessor/Qwen3VLProcessor.from_pretrained() fails due to
-        # a bug in video_processing_auto.py where extractors is None
-        print("  Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        print("  Loading image processor...")
-        image_processor = AutoImageProcessor.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        print("  Loading video processor...")
-        video_processor = Qwen3VLVideoProcessor.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        # Manually assemble the processor
-        print("  Assembling processor...")
-        self._processor = Qwen3VLProcessor(
-            image_processor=image_processor,
-            tokenizer=tokenizer,
-            video_processor=video_processor,
-        )
-        
-        # Copy chat_template from tokenizer to processor (not copied automatically)
-        if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
-            self._processor.chat_template = tokenizer.chat_template
-            print("  Chat template copied from tokenizer.")
-        
-        print("  Loading model weights...")
-        self._model = Qwen3VLForConditionalGeneration.from_pretrained(
-            self._model_id,
-            torch_dtype=self._torch_dtype,
-            device_map=self._device,
-            trust_remote_code=True,
-        ).eval()
+        is_moe_model = is_qwen3_vl_moe_model(self._model_id)
+
+        if is_moe_model:
+            # Follow the official Qwen3-VL MoE loading path.
+            from transformers import AutoModelForImageTextToText, AutoProcessor
+
+            print("  Loading processor (official AutoProcessor path for MoE)...")
+            self._processor = AutoProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading model weights...")
+            print("  Using generation class: AutoModelForImageTextToText")
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self._model_id,
+                dtype=self._torch_dtype,
+                device_map=self._device,
+                trust_remote_code=True,
+            ).eval()
+        else:
+            from transformers import (
+                Qwen3VLProcessor,
+                Qwen3VLVideoProcessor,
+                AutoTokenizer,
+                AutoImageProcessor,
+            )
+            generation_model_class = get_qwen3_vl_generation_model_class(self._model_id)
+
+            # Manually load tokenizer, image_processor, and video_processor separately
+            # to bypass video processor auto-detection issues in transformers 5.x
+            # The AutoProcessor/Qwen3VLProcessor.from_pretrained() fails due to
+            # a bug in video_processing_auto.py where extractors is None
+            print("  Loading tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading image processor...")
+            image_processor = AutoImageProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading video processor...")
+            video_processor = Qwen3VLVideoProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            # Manually assemble the processor
+            print("  Assembling processor...")
+            self._processor = Qwen3VLProcessor(
+                image_processor=image_processor,
+                tokenizer=tokenizer,
+                video_processor=video_processor,
+            )
+
+            # Copy chat_template from tokenizer to processor (not copied automatically)
+            if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
+                self._processor.chat_template = tokenizer.chat_template
+                print("  Chat template copied from tokenizer.")
+
+            print("  Loading model weights...")
+            print(f"  Using generation class: {generation_model_class.__name__}")
+            self._model = generation_model_class.from_pretrained(
+                self._model_id,
+                torch_dtype=self._torch_dtype,
+                device_map=self._device,
+                trust_remote_code=True,
+            ).eval()
         
         # Cache token ID sequences for "yes" and "no" (may be multi-token)
         # We use lowercase as the prompt asks for "Yes" or "No" but models often output lowercase

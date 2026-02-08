@@ -6,7 +6,7 @@ Qwen3-VL-2B-Instruct Vision-Language model from Hugging Face.
 
 Model: https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct
 
-Uses VQAScore methodology: IU Score = P("yes")
+Uses 3-level IU scoring: IU Score = 0.5 * P("two") + P("three")
 """
 
 import math
@@ -14,20 +14,21 @@ from typing import Optional, Union, List
 from pathlib import Path
 
 import torch
-import torch.nn.functional as F
 from PIL import Image
 
-from .iu_base_model import BaseIUModel, YesNoLogitResult
+from .iu_base_model import BaseIUModel, IULevelLogitResult
+from quantification_pipeline.qwen3_vl_loader import (
+    get_qwen3_vl_generation_model_class,
+    is_qwen3_vl_moe_model,
+)
 
 
 class Qwen3VLIUModel(BaseIUModel):
     """
     Qwen3-VL-2B-Instruct implementation for IU calculation.
     
-    This model extracts logits for "yes" and "no" tokens and computes
-    normalized probabilities. The IU score is P("yes").
-    
-    Uses VQAScore methodology for binary yes/no scoring.
+    This model extracts logits for "one", "two", and "three" tokens and computes
+    normalized probabilities. The IU score is 0.5 * P("two") + P("three").
     """
     
     MODEL_ID = "Qwen/Qwen3-VL-2B-Instruct"
@@ -52,9 +53,10 @@ class Qwen3VLIUModel(BaseIUModel):
         self._model = None
         self._processor = None
         
-        # Token IDs for yes/no outputs (cached after load)
-        self._yes_token_id: Optional[int] = None
-        self._no_token_id: Optional[int] = None
+        # Token IDs for 3-level outputs (cached after load)
+        self._one_token_id: Optional[int] = None
+        self._two_token_id: Optional[int] = None
+        self._three_token_id: Optional[int] = None
         
     @property
     def model_name(self) -> str:
@@ -65,70 +67,93 @@ class Qwen3VLIUModel(BaseIUModel):
         return self._model is not None
     
     def load(self) -> None:
-        """Load model and processor, cache yes/no token IDs."""
+        """Load model and processor, cache 3-level token IDs."""
         if self.is_loaded:
             return
             
         print(f"Loading model: {self._model_id}")
+        is_moe_model = is_qwen3_vl_moe_model(self._model_id)
+
+        if is_moe_model:
+            # Follow the official Qwen3-VL MoE loading path.
+            from transformers import AutoModelForImageTextToText, AutoProcessor
+
+            print("  Loading processor (official AutoProcessor path for MoE)...")
+            self._processor = AutoProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading model weights...")
+            print("  Using generation class: AutoModelForImageTextToText")
+            self._model = AutoModelForImageTextToText.from_pretrained(
+                self._model_id,
+                dtype=self._torch_dtype,
+                device_map=self._device,
+                trust_remote_code=True,
+            ).eval()
+        else:
+            from transformers import (
+                Qwen3VLProcessor,
+                Qwen3VLVideoProcessor,
+                AutoTokenizer,
+                AutoImageProcessor,
+            )
+            generation_model_class = get_qwen3_vl_generation_model_class(self._model_id)
+
+            # Manually load tokenizer, image_processor, and video_processor separately
+            # to bypass video processor auto-detection issues in transformers 5.x
+            print("  Loading tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading image processor...")
+            image_processor = AutoImageProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            print("  Loading video processor...")
+            video_processor = Qwen3VLVideoProcessor.from_pretrained(
+                self._model_id,
+                trust_remote_code=True,
+            )
+
+            # Manually assemble the processor
+            print("  Assembling processor...")
+            self._processor = Qwen3VLProcessor(
+                image_processor=image_processor,
+                tokenizer=tokenizer,
+                video_processor=video_processor,
+            )
+
+            # Copy chat_template from tokenizer to processor (not copied automatically)
+            if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
+                self._processor.chat_template = tokenizer.chat_template
+                print("  Chat template copied from tokenizer.")
+
+            print("  Loading model weights...")
+            print(f"  Using generation class: {generation_model_class.__name__}")
+            self._model = generation_model_class.from_pretrained(
+                self._model_id,
+                torch_dtype=self._torch_dtype,
+                device_map=self._device,
+                trust_remote_code=True,
+            ).eval()
         
-        from transformers import (
-            Qwen3VLForConditionalGeneration,
-            Qwen3VLProcessor,
-            Qwen3VLVideoProcessor,
-            AutoTokenizer,
-            AutoImageProcessor,
-        )
-        
-        # Manually load tokenizer, image_processor, and video_processor separately
-        # to bypass video processor auto-detection issues in transformers 5.x
-        print("  Loading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        print("  Loading image processor...")
-        image_processor = AutoImageProcessor.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        print("  Loading video processor...")
-        video_processor = Qwen3VLVideoProcessor.from_pretrained(
-            self._model_id,
-            trust_remote_code=True,
-        )
-        
-        # Manually assemble the processor
-        print("  Assembling processor...")
-        self._processor = Qwen3VLProcessor(
-            image_processor=image_processor,
-            tokenizer=tokenizer,
-            video_processor=video_processor,
-        )
-        
-        # Copy chat_template from tokenizer to processor (not copied automatically)
-        if hasattr(tokenizer, 'chat_template') and tokenizer.chat_template:
-            self._processor.chat_template = tokenizer.chat_template
-            print("  Chat template copied from tokenizer.")
-        
-        print("  Loading model weights...")
-        self._model = Qwen3VLForConditionalGeneration.from_pretrained(
-            self._model_id,
-            torch_dtype=self._torch_dtype,
-            device_map=self._device,
-            trust_remote_code=True,
-        ).eval()
-        
-        # Cache token IDs for yes/no outputs
+        # Cache token IDs for 3-level outputs
         # Try both with and without leading space, use the single-token version
-        self._yes_token_id = self._get_best_token_id("yes")
-        self._no_token_id = self._get_best_token_id("no")
+        self._one_token_id = self._get_best_token_id("one")
+        self._two_token_id = self._get_best_token_id("two")
+        self._three_token_id = self._get_best_token_id("three")
         
         # Log tokenization details for debugging
         print(f"Model loaded.")
-        print(f"  'yes' token ID: {self._yes_token_id}")
-        print(f"  'no' token ID: {self._no_token_id}")
+        print(f"  'one' token ID: {self._one_token_id}")
+        print(f"  'two' token ID: {self._two_token_id}")
+        print(f"  'three' token ID: {self._three_token_id}")
     
     def _get_best_token_id(self, word: str) -> int:
         """
@@ -255,13 +280,13 @@ class Qwen3VLIUModel(BaseIUModel):
         return prompt
     
     @torch.no_grad()
-    def get_yes_no_probs(
+    def get_level_probs(
         self,
         image: Union[Image.Image, Path, str],
         prompt: str,
-    ) -> YesNoLogitResult:
+    ) -> IULevelLogitResult:
         """
-        Compute probabilities for "yes" and "no" tokens.
+        Compute probabilities for "one", "two", and "three" tokens.
         
         Uses VQAScore methodology: extract token probabilities from first
         generated token position.
@@ -271,7 +296,7 @@ class Qwen3VLIUModel(BaseIUModel):
             prompt: Formatted IU prompt
             
         Returns:
-            YesNoLogitResult with probabilities for yes/no
+            IULevelLogitResult with probabilities for three levels
         """
         if not self.is_loaded:
             raise RuntimeError("Model not loaded. Call load() first.")
@@ -312,23 +337,33 @@ class Qwen3VLIUModel(BaseIUModel):
         # Get logits for the first generated token
         first_token_logits = output.scores[0][0]  # Shape: (vocab_size,)
         
-        # Get logits for yes/no tokens
-        yes_logit = first_token_logits[self._yes_token_id].item()
-        no_logit = first_token_logits[self._no_token_id].item()
+        # Get logits for level tokens
+        one_logit = first_token_logits[self._one_token_id].item()
+        two_logit = first_token_logits[self._two_token_id].item()
+        three_logit = first_token_logits[self._three_token_id].item()
         
-        # Normalize using softmax over just yes/no tokens
-        # P(yes) = exp(yes_logit) / (exp(yes_logit) + exp(no_logit))
-        max_logit = max(yes_logit, no_logit)
-        yes_exp = math.exp(yes_logit - max_logit)
-        no_exp = math.exp(no_logit - max_logit)
-        total = yes_exp + no_exp
+        # Normalize using softmax over just one/two/three tokens
+        max_logit = max(one_logit, two_logit, three_logit)
+        one_exp = math.exp(one_logit - max_logit)
+        two_exp = math.exp(two_logit - max_logit)
+        three_exp = math.exp(three_logit - max_logit)
+        total = one_exp + two_exp + three_exp
         
-        yes_prob = yes_exp / total
-        no_prob = no_exp / total
+        one_prob = one_exp / total
+        two_prob = two_exp / total
+        three_prob = three_exp / total
         
-        return YesNoLogitResult(
-            yes_logit=yes_logit,
-            no_logit=no_logit,
-            yes_prob=yes_prob,
-            no_prob=no_prob,
+        return IULevelLogitResult(
+            one_logit=one_logit,
+            two_logit=two_logit,
+            three_logit=three_logit,
+            one_prob=one_prob,
+            two_prob=two_prob,
+            three_prob=three_prob,
         )
+
+
+class Qwen3VL30BA3BInstructIUModel(Qwen3VLIUModel):
+    """Qwen3-VL-30B-A3B-Instruct model variant for IU."""
+
+    MODEL_ID = "Qwen/Qwen3-VL-30B-A3B-Instruct"
