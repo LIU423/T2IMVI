@@ -8,12 +8,30 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # Add project root to path for centralized config import
 _THIS_DIR = Path(__file__).parent.resolve()
-_PROJECT_ROOT = _THIS_DIR.parent.parent.parent
+_PROJECT_ROOT = _THIS_DIR.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # Import centralized path configuration
 from project_config import get_model_output_dir
+
+
+def parse_idiom_ids(raw_values: Optional[List[str]]) -> Optional[set[int]]:
+    if not raw_values:
+        return None
+
+    idiom_ids: set[int] = set()
+    for raw in raw_values:
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                idiom_ids.add(int(token))
+            except ValueError as exc:
+                raise argparse.ArgumentTypeError(f"Invalid idiom id: {token}") from exc
+
+    return idiom_ids or None
 
 
 def load_json(path: Path) -> Dict[str, Any]:
@@ -109,10 +127,17 @@ def compute_cr(literal_track: Dict[str, Any]) -> float:
     return float(total / len(elements))
 
 
-def iter_image_dirs(base_dir: Path) -> Iterable[Path]:
+def iter_image_dirs(base_dir: Path, idiom_ids: Optional[set[int]] = None) -> Iterable[Path]:
     for idiom_dir in sorted(base_dir.glob("idiom_*")):
         if not idiom_dir.is_dir():
             continue
+        if idiom_ids is not None:
+            try:
+                idiom_id = int(idiom_dir.name.split("_", 1)[1])
+            except (IndexError, ValueError):
+                continue
+            if idiom_id not in idiom_ids:
+                continue
         for image_dir in sorted(idiom_dir.glob("image_*")):
             if image_dir.is_dir():
                 yield image_dir
@@ -178,16 +203,23 @@ def main() -> int:
         default=get_model_output_dir("qwen3_vl_2b", "T2IMVI"),
         help="Root directory containing idiom_<id>/image_<id> folders.",
     )
+    parser.add_argument(
+        "--idiom-ids",
+        nargs="+",
+        default=None,
+        help="Optional idiom IDs to process. Supports space-separated and comma-separated values.",
+    )
     args = parser.parse_args()
 
     base_dir = args.base_dir
+    idiom_ids = parse_idiom_ids(args.idiom_ids)
     if not base_dir.exists():
         print(f"Base dir not found: {base_dir}")
         return 1
 
     processed = 0
     skipped = 0
-    for image_dir in iter_image_dirs(base_dir):
+    for image_dir in iter_image_dirs(base_dir, idiom_ids=idiom_ids):
         ok, err = process_image_dir(image_dir)
         if ok:
             processed += 1

@@ -9,6 +9,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Type, Any, Optional, List
 import sys
+import os
 
 # Add project root to path for centralized config import
 _THIS_DIR = Path(__file__).parent.resolve()
@@ -143,6 +144,9 @@ class ScoringConfig:
     
     def get_checkpoint_file(self) -> Path:
         """Get checkpoint file path."""
+        suffix = os.environ.get("PHASE1_CHECKPOINT_SUFFIX", "").strip()
+        if suffix:
+            return self.get_output_dir() / f"checkpoint_{suffix}.json"
         return self.get_output_dir() / "checkpoint.json"
 
 

@@ -21,6 +21,24 @@ from project_config import (
 )
 
 
+def parse_idiom_ids(raw_values: Optional[List[str]]) -> Optional[set[int]]:
+    if not raw_values:
+        return None
+
+    idiom_ids: set[int] = set()
+    for raw in raw_values:
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                idiom_ids.add(int(token))
+            except ValueError as exc:
+                raise argparse.ArgumentTypeError(f"Invalid idiom id: {token}") from exc
+
+    return idiom_ids or None
+
+
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -64,10 +82,15 @@ def compute_s_fid(a1: float, a2: float, b1: float, b2: float) -> float:
     return (1.0 - a1) * b1 + a1 * (w_fig * b1 + w_lit * b2)
 
 
-def iter_idiom_dirs(base_dir: Path) -> Iterable[Path]:
+def iter_idiom_dirs(base_dir: Path, idiom_ids: Optional[set[int]] = None) -> Iterable[Path]:
     for idiom_dir in sorted(base_dir.glob("idiom_*")):
-        if idiom_dir.is_dir():
-            yield idiom_dir
+        if not idiom_dir.is_dir():
+            continue
+        if idiom_ids is not None:
+            idiom_id = parse_suffix_id(idiom_dir.name, "idiom_")
+            if idiom_id is None or idiom_id not in idiom_ids:
+                continue
+        yield idiom_dir
 
 
 def iter_image_dirs(idiom_dir: Path) -> Iterable[Path]:
@@ -182,9 +205,16 @@ def main() -> int:
         default="all_idiom_total_scores.json",
         help="Filename to write base-dir aggregation JSON.",
     )
+    parser.add_argument(
+        "--idiom-ids",
+        nargs="+",
+        default=None,
+        help="Optional idiom IDs to process. Supports space-separated and comma-separated values.",
+    )
     args = parser.parse_args()
 
     base_dir = args.base_dir
+    idiom_ids = parse_idiom_ids(args.idiom_ids)
     if not base_dir.exists():
         print(f"Base dir not found: {base_dir}")
         return 1
@@ -199,7 +229,7 @@ def main() -> int:
     skipped_images = 0
     idiom_summaries: Dict[str, Dict[str, Any]] = {}
 
-    for idiom_dir in iter_idiom_dirs(base_dir):
+    for idiom_dir in iter_idiom_dirs(base_dir, idiom_ids=idiom_ids):
         idiom_id = parse_suffix_id(idiom_dir.name, "idiom_")
         if idiom_id is None:
             continue

@@ -3,19 +3,19 @@ CLI entry point for Phase 2 AEA Calculation Pipeline.
 
 Usage:
     # Full run on all idioms
-    python -m quantification_pipeline.phase2_calculation.main
+    python -m quantification_pipeline.phase2_calculation.aea_main
     
     # Specific idioms
-    python -m quantification_pipeline.phase2_calculation.main --idiom-ids 1 2 3
+    python -m quantification_pipeline.phase2_calculation.aea_main --idiom-ids 1 2 3
     
     # Test mode (limited images)
-    python -m quantification_pipeline.phase2_calculation.main --idiom-ids 1 --test --test-n-images 2
+    python -m quantification_pipeline.phase2_calculation.aea_main --idiom-ids 1 --test --test-n-images 2
     
     # Different model
-    python -m quantification_pipeline.phase2_calculation.main --model qwen3-vl-2b
+    python -m quantification_pipeline.phase2_calculation.aea_main --model qwen3-vl-2b
     
     # No checkpoint resume
-    python -m quantification_pipeline.phase2_calculation.main --no-resume
+    python -m quantification_pipeline.phase2_calculation.aea_main --no-resume
 """
 
 import argparse
@@ -32,7 +32,7 @@ from .config import (
     DEFAULT_MODEL_KEY,
     setup_logging,
 )
-from .evaluator import AEAEvaluator
+from .aea_evaluator import AEAEvaluator
 
 
 logger = logging.getLogger(__name__)
@@ -46,16 +46,16 @@ def parse_args() -> argparse.Namespace:
         epilog="""
 Examples:
   # Run on all idioms
-  python -m quantification_pipeline.phase2_calculation.main
+  python -m quantification_pipeline.phase2_calculation.aea_main
   
   # Run on specific idioms
-  python -m quantification_pipeline.phase2_calculation.main --idiom-ids 1 2 3
+  python -m quantification_pipeline.phase2_calculation.aea_main --idiom-ids 1 2 3
   
   # Test mode with 1 image per idiom
-  python -m quantification_pipeline.phase2_calculation.main --idiom-ids 1 --test --test-n-images 1
+  python -m quantification_pipeline.phase2_calculation.aea_main --idiom-ids 1 --test --test-n-images 1
   
   # Use different model
-  python -m quantification_pipeline.phase2_calculation.main --model qwen3-vl-2b
+  python -m quantification_pipeline.phase2_calculation.aea_main --model qwen3-vl-2b
         """,
     )
     
