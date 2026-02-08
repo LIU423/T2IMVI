@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -219,15 +221,38 @@ def main() -> int:
 
     processed = 0
     skipped = 0
+    timing_total_seconds = 0.0
+    timing_processed_images = 0
     for image_dir in iter_image_dirs(base_dir, idiom_ids=idiom_ids):
+        t0 = time.perf_counter()
         ok, err = process_image_dir(image_dir)
+        elapsed = time.perf_counter() - t0
         if ok:
             processed += 1
+            timing_total_seconds += elapsed
+            timing_processed_images += 1
         else:
             skipped += 1
             print(f"Skip: {err}")
 
     print(f"Done. processed={processed}, skipped={skipped}")
+    avg_processed = (timing_total_seconds / timing_processed_images) if timing_processed_images else 0.0
+    print(
+        "Timing summary: "
+        f"total={timing_total_seconds:.2f}s, "
+        f"avg/processed_image={avg_processed:.6f}s"
+    )
+    summary = {
+        "phase": "phase2_vc_ca_cr",
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "base_dir": str(base_dir),
+        "processed_images": timing_processed_images,
+        "skipped_images": skipped,
+        "total_seconds": timing_total_seconds,
+        "avg_seconds_per_processed_image": avg_processed,
+    }
+    summary_path = base_dir / "timing_phase2_vc_ca_cr.json"
+    write_json(summary_path, summary)
     return 0
 
 

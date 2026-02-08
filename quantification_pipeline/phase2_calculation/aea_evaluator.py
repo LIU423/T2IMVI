@@ -9,9 +9,12 @@ This module coordinates the entire AEA calculation workflow:
 """
 
 import logging
+import json
+import time
 import sys
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime
 
 from tqdm import tqdm
 
@@ -45,6 +48,9 @@ class AEAEvaluator:
         self.checkpoint_manager: Optional[CheckpointManager] = None
         self.calculator: Optional[AEACalculator] = None
         self._images_since_cleanup: int = 0
+        self._timing_total_seconds: float = 0.0
+        self._timing_attempted_images: int = 0
+        self._timing_success_images: int = 0
 
     def _cleanup_after_images(self) -> None:
         """Best-effort CUDA memory cleanup."""
@@ -207,13 +213,18 @@ class AEAEvaluator:
                     pbar.set_postfix_str(f"{image_info.key}")
                     
                     try:
+                        t0 = time.perf_counter()
                         aea_score = self.process_single_image(image_info)
+                        elapsed = time.perf_counter() - t0
                         
                         # Update checkpoint
                         self.checkpoint_manager.mark_completed(
                             image_info.idiom_id, image_info.image_id
                         )
                         processed_count += 1
+                        self._timing_total_seconds += elapsed
+                        self._timing_attempted_images += 1
+                        self._timing_success_images += 1
                         
                         # Save checkpoint periodically
                         if processed_count % self.config.checkpoint_interval == 0:
@@ -224,6 +235,7 @@ class AEAEvaluator:
                         )
                         
                     except Exception as e:
+                        self._timing_attempted_images += 1
                         logger.error(f"Error processing {image_info.key}: {e}")
                         raise
                     finally:
@@ -246,5 +258,33 @@ class AEAEvaluator:
         print(f"\n{'=' * 60}")
         print("AEA calculation complete!")
         print(f"Total processed: {processed_count} images")
+        self._print_and_save_timing_summary()
         print(f"Output directory: {self.config.phase1_output_dir}")
         print("=" * 60 + "\n")
+
+    def _print_and_save_timing_summary(self) -> None:
+        attempted = self._timing_attempted_images
+        success = self._timing_success_images
+        avg_attempted = (self._timing_total_seconds / attempted) if attempted else 0.0
+        avg_success = (self._timing_total_seconds / success) if success else 0.0
+        print(
+            "Timing summary: "
+            f"total={self._timing_total_seconds:.2f}s, "
+            f"avg/attempted_image={avg_attempted:.3f}s, "
+            f"avg/success_image={avg_success:.3f}s"
+        )
+        summary = {
+            "phase": "phase2_aea",
+            "model_key": self.config.model_key,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "attempted_images": attempted,
+            "processed_success_images": success,
+            "failed_images": attempted - success,
+            "total_seconds": self._timing_total_seconds,
+            "avg_seconds_per_attempted_image": avg_attempted,
+            "avg_seconds_per_success_image": avg_success,
+        }
+        out_path = self.config.phase1_output_dir / "timing_phase2_aea.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)

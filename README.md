@@ -182,6 +182,7 @@ python quantification_pipeline/score_total.py
 |------|------|
 | Experiment 1 | 排名对齐分析 |
 | Experiment 2 | 分数稳定性分析 |
+| Comparison | 对比实验（如 direct VLM baseline） |
 
 **运行方式**:
 ```bash
@@ -196,6 +197,9 @@ python reliability_analysis/main.py exp2 --self-test qwen3_vl_2b_T2IMVI
 
 # 运行所有实验
 python reliability_analysis/main.py all -m qwen3_vl_2b_T2IMVI
+
+# 运行对比实验：direct VLM baseline
+python reliability_analysis/comparison/direct_vlm_scoring_baseline.py --model qwen3-vl-2b
 
 # 显示/导出配置
 python reliability_analysis/main.py config

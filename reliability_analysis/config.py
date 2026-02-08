@@ -23,6 +23,7 @@ from project_config import (
     DATA_DIR as _DATA_DIR,
     INPUT_IRFL_MATCHED_IMAGES_DIR,
     OUTPUT_IRFL_DIR,
+    RELIABILITY_ANALYSIS_COMPARISON_DIR,
     RELIABILITY_ANALYSIS_RESULTS_DIR,
 )
 
@@ -60,9 +61,12 @@ class ModelConfig:
     description: str = ""
     score_field: str = "figurative_score"
     additional_params: Dict[str, Any] = field(default_factory=dict)
+    output_path_override: Optional[Path] = None
     
     def get_output_path(self) -> Path:
         """Get the output path for this model's results."""
+        if self.output_path_override is not None:
+            return Path(self.output_path_override)
         return OUTPUT_PATH / self.strategy_id
 
 
@@ -86,6 +90,28 @@ MODEL_CONFIGS: Dict[str, ModelConfig] = {
         strategy_id="qwen3_vl_30b_a3b_instruct_T2IMVI",
         description="Qwen3-VL-30B-A3B-Instruct model with T2IMVI strategy",
         score_field="figurative_score",
+    ),
+    "comparison_direct_vlm_baseline_qwen3_vl_2b": ModelConfig(
+        name="Direct VLM Baseline (Qwen3-VL-2B)",
+        strategy_id="comparison_direct_vlm_baseline_qwen3_vl_2b",
+        description="Direct idiom-image scoring baseline with Qwen3-VL-2B",
+        score_field="figurative_score",
+        output_path_override=(
+            RELIABILITY_ANALYSIS_COMPARISON_DIR
+            / "direct_vlm_scoring_baseline"
+            / "qwen3_vl_2b"
+        ),
+    ),
+    "comparison_direct_vlm_baseline_qwen3_vl_30b_a3b_instruct": ModelConfig(
+        name="Direct VLM Baseline (Qwen3-VL-30B-A3B-Instruct)",
+        strategy_id="comparison_direct_vlm_baseline_qwen3_vl_30b_a3b_instruct",
+        description="Direct idiom-image scoring baseline with Qwen3-VL-30B-A3B-Instruct",
+        score_field="figurative_score",
+        output_path_override=(
+            RELIABILITY_ANALYSIS_COMPARISON_DIR
+            / "direct_vlm_scoring_baseline"
+            / "qwen3_vl_30b_a3b_instruct"
+        ),
     ),
     
     # -------------------------------------------------------------------------
@@ -422,6 +448,11 @@ def export_config(output_path: Optional[Path] = None) -> Dict[str, Any]:
                 "strategy_id": cfg.strategy_id,
                 "description": cfg.description,
                 "score_field": cfg.score_field,
+                "output_path_override": (
+                    str(cfg.output_path_override)
+                    if cfg.output_path_override is not None
+                    else None
+                ),
             }
             for key, cfg in MODEL_CONFIGS.items()
         },
