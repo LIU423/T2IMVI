@@ -44,6 +44,22 @@ class AEAEvaluator:
         self.data_handler: Optional[DataHandler] = None
         self.checkpoint_manager: Optional[CheckpointManager] = None
         self.calculator: Optional[AEACalculator] = None
+        self._images_since_cleanup: int = 0
+
+    def _cleanup_after_images(self) -> None:
+        """Best-effort CUDA memory cleanup."""
+        try:
+            import gc
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, "ipc_collect"):
+                    torch.cuda.ipc_collect()
+        except Exception:
+            # Best-effort cleanup only.
+            pass
     
     def _init_model(self) -> BaseAEAModel:
         """Initialize and load the VLM model."""
@@ -210,6 +226,11 @@ class AEAEvaluator:
                     except Exception as e:
                         logger.error(f"Error processing {image_info.key}: {e}")
                         raise
+                    finally:
+                        self._images_since_cleanup += 1
+                        if self._images_since_cleanup >= 10:
+                            self._cleanup_after_images()
+                            self._images_since_cleanup = 0
             
             # Final checkpoint save
             self.checkpoint_manager.save()

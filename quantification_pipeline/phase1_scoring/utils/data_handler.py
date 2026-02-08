@@ -413,6 +413,7 @@ class DataHandler:
         self,
         idiom_ids: Optional[List[int]] = None,
         max_images_per_idiom: Optional[int] = None,
+        target_image_nums_by_idiom: Optional[Dict[int, List[int]]] = None,
     ) -> Generator[Tuple[IdiomData, ImageInfo], None, None]:
         """
         Iterate over pending (not yet processed) idiom-image pairs.
@@ -422,6 +423,7 @@ class DataHandler:
         Args:
             idiom_ids: Optional list of specific idiom IDs to process
             max_images_per_idiom: Optional limit on images per idiom (for testing)
+            target_image_nums_by_idiom: Optional filter map {idiom_id: [image_num, ...]}
             
         Yields:
             Tuples of (IdiomData, ImageInfo) for pending work
@@ -437,10 +439,16 @@ class DataHandler:
                 continue
             
             images = self.get_images_for_idiom(idiom_id)
-            
+
             if max_images_per_idiom is not None:
                 images = images[:max_images_per_idiom]
-            
+
+            if target_image_nums_by_idiom is not None:
+                target_nums = set(target_image_nums_by_idiom.get(idiom_id, []))
+                if not target_nums:
+                    continue
+                images = [img for img in images if img.image_num in target_nums]
+
             for image_info in images:
                 # Check if already processed (checkpoint support)
                 if self.result_exists(idiom_id, image_info.image_num):

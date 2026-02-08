@@ -20,6 +20,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # Import centralized path configuration
 from project_config import (
     PROJECT_ROOT,
+    DATA_DIR,
     INPUT_IRFL_MATCHED_IMAGES_DIR,
     OUTPUT_PHASE1_EXTRACTION_OUTPUT_DIR,
     PROMPT_DIR,
@@ -107,6 +108,9 @@ class ScoringConfig:
     
     # Processing settings
     save_interval: int = 10  # Save checkpoint every N images
+    max_oom_attempts: int = 3  # Max attempts for OOM errors per image
+    oom_retry_backoff_seconds: float = 1.0  # Sleep between OOM retries
+    continue_on_error: bool = True  # Continue processing after a failed image
     
     # Resume behavior
     resume_from_checkpoint: bool = True
@@ -118,6 +122,8 @@ class ScoringConfig:
     
     # Scope settings
     idiom_ids: Optional[List[int]] = None  # If None, process all idioms
+    # Optional filter for exact failed-image reruns: {idiom_id: [image_num, ...]}
+    target_image_nums_by_idiom: Optional[Dict[int, List[int]]] = None
     
     # Paths (use defaults from module level)
     input_images_dir: Path = field(default_factory=lambda: INPUT_IMAGES_DIR)
@@ -125,6 +131,7 @@ class ScoringConfig:
     figurative_prompt_file: Path = field(default_factory=lambda: FIGURATIVE_PROMPT_FILE)
     literal_prompt_file: Path = field(default_factory=lambda: LITERAL_PROMPT_FILE)
     output_base_dir: Path = field(default_factory=lambda: OUTPUT_BASE_DIR)
+    failed_items_dir: Path = field(default_factory=lambda: DATA_DIR / "phase1_scoring" / "failed_items")
     
     def get_torch_dtype(self):
         """Convert string dtype to torch dtype."""
@@ -148,6 +155,18 @@ class ScoringConfig:
         if suffix:
             return self.get_output_dir() / f"checkpoint_{suffix}.json"
         return self.get_output_dir() / "checkpoint.json"
+
+    def get_failed_items_file(self) -> Path:
+        """Get failed-items log file path under data/."""
+        model_suffix = self.model_name.replace("-", "_")
+        model_dir = self.failed_items_dir / model_suffix
+        suffix = (
+            os.environ.get("PHASE1_FAILED_SUFFIX", "").strip()
+            or os.environ.get("PHASE1_CHECKPOINT_SUFFIX", "").strip()
+        )
+        if suffix:
+            return model_dir / f"failed_items_{suffix}.jsonl"
+        return model_dir / "failed_items.jsonl"
 
 
 # ============================================================================

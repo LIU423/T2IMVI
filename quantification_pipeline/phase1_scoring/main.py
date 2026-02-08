@@ -26,12 +26,13 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 from .config import ScoringConfig, get_available_models
 from .evaluator import ScoringEvaluator
@@ -149,6 +150,33 @@ Examples:
         help="Save checkpoint every N images (default: 10)",
     )
 
+    parser.add_argument(
+        "--oom-max-attempts",
+        type=int,
+        default=3,
+        help="Maximum attempts per image for OOM errors (default: 3)",
+    )
+
+    parser.add_argument(
+        "--oom-retry-backoff-seconds",
+        type=float,
+        default=1.0,
+        help="Backoff seconds between OOM retries (default: 1.0)",
+    )
+
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop immediately when one image fails",
+    )
+
+    parser.add_argument(
+        "--target-items-file",
+        type=str,
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+
     # Throughput / resource utilization
     parser.add_argument(
         "--parallel-workers",
@@ -231,6 +259,41 @@ def _detect_gpu_count(logger: logging.Logger) -> int:
         return 0
 
 
+def _load_target_items_file(path: str) -> Dict[int, List[int]]:
+    """
+    Load target image filters from json/jsonl.
+
+    Expected item format:
+      {"idiom_id": 223, "image_num": 12}
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"target items file not found: {p}")
+
+    raw_items: List[dict]
+    if p.suffix.lower() == ".jsonl":
+        raw_items = []
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    raw_items.append(json.loads(line))
+    else:
+        with open(p, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, list):
+            raise ValueError("target items json must be a list of objects")
+        raw_items = loaded
+
+    mapping: Dict[int, set] = {}
+    for item in raw_items:
+        idiom_id = int(item["idiom_id"])
+        image_num = int(item["image_num"])
+        mapping.setdefault(idiom_id, set()).add(image_num)
+
+    return {idiom_id: sorted(list(nums)) for idiom_id, nums in mapping.items()}
+
+
 def _should_enable_parallel(args: argparse.Namespace, config: ScoringConfig, gpu_count: int) -> bool:
     """Decide whether to launch multiple worker processes."""
     if args.worker_mode:
@@ -297,10 +360,17 @@ def _run_parallel_workers(
             cmd.extend(["--test", "--test-n-images", str(args.test_n_images)])
         if args.verbose:
             cmd.append("--verbose")
+        if args.target_items_file:
+            cmd.extend(["--target-items-file", args.target_items_file])
+        if args.fail_fast:
+            cmd.append("--fail-fast")
+        cmd.extend(["--oom-max-attempts", str(args.oom_max_attempts)])
+        cmd.extend(["--oom-retry-backoff-seconds", str(args.oom_retry_backoff_seconds)])
 
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
         env["PHASE1_CHECKPOINT_SUFFIX"] = f"worker_{worker_idx}"
+        env["PHASE1_FAILED_SUFFIX"] = f"worker_{worker_idx}"
 
         logger.info(
             "Launching worker %s on GPU %s with %s idiom(s)",
@@ -339,16 +409,24 @@ def main() -> int:
     logger = logging.getLogger(__name__)
     
     # Build configuration
+    target_image_nums_by_idiom = None
+    if args.target_items_file:
+        target_image_nums_by_idiom = _load_target_items_file(args.target_items_file)
+
     config = ScoringConfig(
         model_name=args.model,
         device=args.device,
         torch_dtype=args.dtype,
         save_interval=args.save_interval,
+        max_oom_attempts=args.oom_max_attempts,
+        oom_retry_backoff_seconds=args.oom_retry_backoff_seconds,
+        continue_on_error=not args.fail_fast,
         resume_from_checkpoint=not args.no_resume,
         test_mode=args.test,
         test_n_idioms=args.test_n_idioms,
         test_n_images=args.test_n_images,
         idiom_ids=args.idiom_ids,
+        target_image_nums_by_idiom=target_image_nums_by_idiom,
     )
     
     # Log configuration
@@ -359,6 +437,15 @@ def main() -> int:
         logger.info(f"Processing idiom IDs: {config.idiom_ids}")
     if config.test_mode:
         logger.info(f"TEST MODE: {config.test_n_idioms} idiom(s), {config.test_n_images} images each")
+    logger.info(f"Max OOM attempts per image: {config.max_oom_attempts}")
+    logger.info(f"Continue on error: {config.continue_on_error}")
+    if config.target_image_nums_by_idiom:
+        n_targets = sum(len(v) for v in config.target_image_nums_by_idiom.values())
+        logger.info(
+            "Target-only mode enabled: %s idiom(s), %s image(s)",
+            len(config.target_image_nums_by_idiom),
+            n_targets,
+        )
 
     gpu_count = _detect_gpu_count(logger)
     idiom_ids = _get_target_idiom_ids(config)

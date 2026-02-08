@@ -8,6 +8,7 @@ This module coordinates:
 """
 
 import logging
+import time
 from typing import Optional, List
 from tqdm import tqdm
 
@@ -15,6 +16,7 @@ from .config import ScoringConfig, get_model_class
 from .models.base_model import BaseVerifierModel
 from .utils.data_handler import DataHandler, IdiomData, ImageInfo
 from .utils.checkpoint import CheckpointManager
+from .utils.failed_items import FailedItemLogger
 from .verifiers.figurative_verifier import FigurativeVerifier
 from .verifiers.literal_verifier import LiteralVerifier
 
@@ -49,6 +51,9 @@ class ScoringEvaluator:
         self.checkpoint: Optional[CheckpointManager] = None
         self.figurative_verifier: Optional[FigurativeVerifier] = None
         self.literal_verifier: Optional[LiteralVerifier] = None
+        self.failed_items_logger: Optional[FailedItemLogger] = None
+        self.failed_count: int = 0
+        self._images_since_cleanup: int = 0
     
     def _init_model(self) -> BaseVerifierModel:
         """Initialize and load the VLM model."""
@@ -95,6 +100,109 @@ class ScoringEvaluator:
             model=self.model,
             prompt_template=self.data_handler.literal_prompt,
         )
+
+    def _init_failed_items_logger(self) -> FailedItemLogger:
+        """Initialize failed-items JSONL logger."""
+        return FailedItemLogger(self.config.get_failed_items_file())
+
+    def _is_oom_error(self, error: Exception) -> bool:
+        """Heuristic check for CUDA/VRAM OOM errors."""
+        msg = str(error).lower()
+        return (
+            "out of memory" in msg
+            or "cuda out of memory" in msg
+            or "cuda error: out of memory" in msg
+            or "cudnn_status_alloc_failed" in msg
+        )
+
+    def _cleanup_after_oom(self) -> None:
+        """Try to release CUDA memory before retry."""
+        try:
+            import gc
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, "ipc_collect"):
+                    torch.cuda.ipc_collect()
+        except Exception:
+            # Best-effort cleanup only.
+            pass
+
+    def _cleanup_after_image(self) -> None:
+        """Best-effort cleanup after each image to cap VRAM growth."""
+        try:
+            import gc
+            import torch
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, "ipc_collect"):
+                    torch.cuda.ipc_collect()
+        except Exception:
+            # Best-effort cleanup only.
+            pass
+
+    def _process_with_retry(self, idiom_data: IdiomData, image_info: ImageInfo) -> bool:
+        """Process one image with OOM-only retries and failed-item logging."""
+        try:
+            max_attempts = max(1, int(self.config.max_oom_attempts))
+            last_error: Optional[Exception] = None
+
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    self.process_single_image(idiom_data, image_info)
+                    return True
+                except Exception as exc:
+                    last_error = exc
+                    is_oom = self._is_oom_error(exc)
+                    can_retry = is_oom and attempt < max_attempts
+                    if can_retry:
+                        logger.warning(
+                            "OOM on idiom_%s/%s (attempt %s/%s). Retrying...",
+                            idiom_data.idiom_id,
+                            image_info.image_id,
+                            attempt,
+                            max_attempts,
+                        )
+                        self._cleanup_after_oom()
+                        if self.config.oom_retry_backoff_seconds > 0:
+                            time.sleep(self.config.oom_retry_backoff_seconds)
+                        continue
+                    break
+
+            assert last_error is not None
+            self.failed_count += 1
+            is_oom = self._is_oom_error(last_error)
+            if self.failed_items_logger is not None:
+                record = self.failed_items_logger.make_record(
+                    model_name=self.config.model_name,
+                    idiom_id=idiom_data.idiom_id,
+                    image_num=image_info.image_num,
+                    image_id=image_info.image_id,
+                    is_oom=is_oom,
+                    attempts=max_attempts if is_oom else 1,
+                    error=last_error,
+                )
+                self.failed_items_logger.append(record)
+
+            logger.error(
+                "Failed idiom_%s/%s after %s attempt(s): %s",
+                idiom_data.idiom_id,
+                image_info.image_id,
+                max_attempts if is_oom else 1,
+                last_error,
+            )
+            if not self.config.continue_on_error:
+                raise last_error
+            return False
+        finally:
+            self._images_since_cleanup += 1
+            if self._images_since_cleanup >= 10:
+                self._cleanup_after_image()
+                self._images_since_cleanup = 0
     
     def process_single_image(
         self,
@@ -170,6 +278,9 @@ class ScoringEvaluator:
         print("\n[3/5] Loading checkpoint...")
         self.checkpoint = self._init_checkpoint()
         print(f"  Previously completed: {self.checkpoint.get_completed_count()} images")
+
+        self.failed_items_logger = self._init_failed_items_logger()
+        print(f"  Failed items log: {self.config.get_failed_items_file()}")
         
         print("\n[4/5] Initializing verifiers...")
         self._init_verifiers()
@@ -190,6 +301,7 @@ class ScoringEvaluator:
         pending_work = list(self.data_handler.iter_pending_work(
             idiom_ids=idiom_ids,
             max_images_per_idiom=max_images,
+            target_image_nums_by_idiom=self.config.target_image_nums_by_idiom,
         ))
         
         if not pending_work:
@@ -201,7 +313,7 @@ class ScoringEvaluator:
         
         try:
             for i, (idiom_data, image_info) in enumerate(tqdm(pending_work, desc="Verifying")):
-                self.process_single_image(idiom_data, image_info)
+                self._process_with_retry(idiom_data, image_info)
                 
                 # Periodic checkpoint save
                 if (i + 1) % self.config.save_interval == 0:
@@ -238,5 +350,7 @@ class ScoringEvaluator:
         print("Verification complete!")
         if self.checkpoint is not None:
             print(f"Total processed: {self.checkpoint.get_completed_count()} images")
+        print(f"Failed images: {self.failed_count}")
+        print(f"Failed log file: {self.config.get_failed_items_file()}")
         print(f"Output directory: {self.config.get_output_dir()}")
         print("=" * 60)
