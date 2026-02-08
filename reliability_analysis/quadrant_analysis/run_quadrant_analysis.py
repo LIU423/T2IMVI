@@ -17,10 +17,16 @@ from quadrant_analysis.analyzer import print_quadrant_summary, run_quadrant_anal
 from quadrant_analysis.config import DEFAULT_SCORE_FIELDS, QuadrantConfig
 
 
-def _parse_idiom_ids(value: Optional[str]) -> Optional[List[int]]:
-    if value is None or value.strip() == "":
+def _parse_idiom_ids(values: Optional[List[str]]) -> Optional[List[int]]:
+    if not values:
         return None
-    return [int(x.strip()) for x in value.split(",") if x.strip()]
+    parsed: List[int] = []
+    for value in values:
+        for token in value.split(","):
+            token = token.strip()
+            if token:
+                parsed.append(int(token))
+    return parsed if parsed else None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -35,10 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--idiom-ids",
         type=str,
+        nargs="+",
         default=None,
-        help="Comma-separated idiom IDs, e.g. 1,2,3. Omit to process all idioms.",
+        help=(
+            "Idiom IDs. Supports both '--idiom-ids 1 2 3' and "
+            "'--idiom-ids 1,2,3'. Omit to process all idioms."
+        ),
     )
-    parser.add_argument("--transparency-threshold", type=float, default=0.5)
+    parser.add_argument("--transparency-threshold", type=float, default=0.7)
     parser.add_argument("--imageability-threshold", type=float, default=0.5)
     parser.add_argument("--rbo-p", type=float, default=DEFAULT_EXPERIMENT_CONFIG.rbo_p)
     parser.add_argument(

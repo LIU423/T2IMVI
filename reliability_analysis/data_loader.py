@@ -21,10 +21,16 @@ from config import (
     get_model_output_path,
     ModelConfig,
 )
+from project_config import OUTPUT_PHASE0_DIR
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Cache for idiom-level phase0 scores used when total_score.json is unavailable.
+_PHASE0_SCORE_MAP: Optional[Dict[int, Dict[str, float]]] = None
+_S_POT_K: float = 9.0
 
 
 # =============================================================================
@@ -124,6 +130,77 @@ def _collect_entity_action_scores(track_data: Dict[str, Any]) -> List[float]:
         if isinstance(score, (int, float)):
             scores.append(float(score))
     return scores
+
+
+def _mean_numeric_values(data: Dict[str, Any]) -> float:
+    """Mean of numeric values in a dict; 0.0 when none exist."""
+    values: List[float] = []
+    for value in data.values():
+        if isinstance(value, (int, float)):
+            values.append(float(value))
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def _compute_s_pot(a1: float, a2: float, b1: float, b2: float, k: float = _S_POT_K) -> float:
+    """Compute S_pot with the same formula used in quantification_pipeline/score_total.py."""
+    p = 1.0 + k * (1.0 - a2)
+    mean_power = ((b1 ** p + b2 ** p) / 2.0) ** (1.0 / p)
+    return (1.0 - a1) * b1 + a1 * mean_power
+
+
+def _compute_s_fid(a1: float, a2: float, b1: float, b2: float) -> float:
+    """Compute S_fid with the same formula used in quantification_pipeline/score_total.py."""
+    w_fig = 1.0 - 0.5 * a2
+    w_lit = 0.5 * a2
+    return (1.0 - a1) * b1 + a1 * (w_fig * b1 + w_lit * b2)
+
+
+def _load_phase0_score_map() -> Dict[int, Dict[str, float]]:
+    """Load idiom-level imageability/transparency from available phase0 output files.
+
+    Uses newest files last so newer values override older ones.
+    """
+    global _PHASE0_SCORE_MAP
+    if _PHASE0_SCORE_MAP is not None:
+        return _PHASE0_SCORE_MAP
+
+    score_map: Dict[int, Dict[str, float]] = {}
+    phase0_files = sorted(
+        OUTPUT_PHASE0_DIR.glob("phase0*.json"),
+        key=lambda p: p.stat().st_mtime,
+    )
+
+    for phase0_path in phase0_files:
+        try:
+            with open(phase0_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (json.JSONDecodeError, OSError, ValueError):
+            continue
+
+        if not isinstance(payload, list):
+            continue
+
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            idiom_id = item.get("idiom_id")
+            imageability = item.get("imageability")
+            transparency = item.get("transparency")
+            if not isinstance(idiom_id, int):
+                continue
+            if not isinstance(imageability, (int, float)):
+                continue
+            if not isinstance(transparency, (int, float)):
+                continue
+            score_map[idiom_id] = {
+                "imageability": float(imageability),
+                "transparency": float(transparency),
+            }
+
+    _PHASE0_SCORE_MAP = score_map
+    return score_map
 
 
 def compute_entity_action_avg(
@@ -271,30 +348,71 @@ def load_model_output(
         ModelOutput object if file exists and is valid, None otherwise
     """
     path = get_model_output_path(model_key, idiom_id, image_id)
-    
-    if not path.exists():
+
+    entity_action_avg = compute_entity_action_avg(model_key, idiom_id, image_id)
+
+    # Primary source: total_score.json
+    if path.exists():
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            return ModelOutput(
+                idiom_id=data["idiom_id"],
+                image_id=data["image_id"],
+                imageability=float(data.get("imageability", 0.0)),
+                transparency=float(data.get("transparency", 0.0)),
+                figurative_score=float(data.get("figurative_score", 0.0)),
+                literal_score=float(data.get("literal_score", 0.0)),
+                s_pot=float(data.get("S_pot", 0.0)),
+                s_fid=float(data.get("S_fid", 0.0)),
+                entity_action_avg=entity_action_avg,
+            )
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.warning(f"Failed to load model output {path}: {e}")
+            return None
+
+    # Fallback source: figurative_score.json + literal_score.json + phase0 scores
+    config = get_model_config(model_key)
+    image_dir = config.get_output_path() / f"idiom_{idiom_id}" / f"image_{image_id}"
+    figurative_path = image_dir / "figurative_score.json"
+    literal_path = image_dir / "literal_score.json"
+
+    if not figurative_path.exists() or not literal_path.exists():
         logger.debug(f"Model output file not found: {path}")
         return None
-    
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
 
-        entity_action_avg = compute_entity_action_avg(model_key, idiom_id, image_id)
-        
+    phase0_scores = _load_phase0_score_map().get(idiom_id)
+    if phase0_scores is None:
+        logger.debug(
+            f"Missing phase0 scores for idiom {idiom_id}; cannot build fallback total scores"
+        )
+        return None
+
+    try:
+        with open(figurative_path, "r", encoding="utf-8") as f:
+            figurative_data = json.load(f)
+        with open(literal_path, "r", encoding="utf-8") as f:
+            literal_data = json.load(f)
+
+        b1 = _mean_numeric_values(figurative_data)
+        b2 = _mean_numeric_values(literal_data)
+        a1 = float(phase0_scores["imageability"])
+        a2 = float(phase0_scores["transparency"])
+
         return ModelOutput(
-            idiom_id=data["idiom_id"],
-            image_id=data["image_id"],
-            imageability=float(data.get("imageability", 0.0)),
-            transparency=float(data.get("transparency", 0.0)),
-            figurative_score=float(data.get("figurative_score", 0.0)),
-            literal_score=float(data.get("literal_score", 0.0)),
-            s_pot=float(data.get("S_pot", 0.0)),
-            s_fid=float(data.get("S_fid", 0.0)),
+            idiom_id=idiom_id,
+            image_id=image_id,
+            imageability=a1,
+            transparency=a2,
+            figurative_score=b1,
+            literal_score=b2,
+            s_pot=_compute_s_pot(a1, a2, b1, b2),
+            s_fid=_compute_s_fid(a1, a2, b1, b2),
             entity_action_avg=entity_action_avg,
         )
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning(f"Failed to load model output {path}: {e}")
+    except (json.JSONDecodeError, OSError, ValueError, KeyError) as e:
+        logger.warning(f"Failed fallback model output load for idiom {idiom_id} image {image_id}: {e}")
         return None
 
 

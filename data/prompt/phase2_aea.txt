@@ -42,6 +42,9 @@ Output **ONLY** one of the following three words. Do not output the reasoning.
 - **two** (Technically not wrong, neutral, or barely passable)
 - **one** (Clear contradiction in color or style)
 
+## Constraint
+Constraint: Output **ONLY** one of the following spelled-out words: "three", "two", or "one". **STRICTLY FORBIDDEN:** Do not output digits (1, 2, 3) or any punctuation.
+
 # Example (Few-Shot)
 
 **Case 1 (Your Input)**
