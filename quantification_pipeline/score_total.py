@@ -155,7 +155,7 @@ def main() -> int:
     parser.add_argument(
         "--phase0-json",
         type=Path,
-        default=get_phase0_output_file("qwen3-0.6b"),
+        default=OUTPUT_PHASE0_DIR / "phase0_test.json",
         help="Phase0 JSON containing imageability/transparency per idiom_id.",
     )
     parser.add_argument(

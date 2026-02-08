@@ -80,6 +80,7 @@ class ModelOutput:
         literal_score: Score for literal interpretation
         s_pot: Potential score
         s_fid: Fidelity score
+        entity_action_avg: Mean score across figurative/literal entities and actions
     """
     idiom_id: int
     image_id: int
@@ -89,6 +90,7 @@ class ModelOutput:
     literal_score: float
     s_pot: float
     s_fid: float
+    entity_action_avg: float
     
     def get_score(self, score_field: str = "figurative_score") -> float:
         """Get a specific score by field name.
@@ -97,6 +99,7 @@ class ModelOutput:
             score_field: Name of the score field to retrieve.
                          Special values:
                          - "fig_lit_avg": arithmetic mean of figurative_score and literal_score
+                         - "entity_action_avg": mean of entity/action scores from figurative/literal tracks
             
         Returns:
             The score value
@@ -107,6 +110,54 @@ class ModelOutput:
         if score_field == "fig_lit_avg":
             return (self.figurative_score + self.literal_score) / 2.0
         return getattr(self, score_field)
+
+
+def _collect_entity_action_scores(track_data: Dict[str, Any]) -> List[float]:
+    """Collect numeric scores from entities and actions in a track."""
+    scores: List[float] = []
+    for item in track_data.get("entities", []):
+        score = item.get("score")
+        if isinstance(score, (int, float)):
+            scores.append(float(score))
+    for item in track_data.get("actions", []):
+        score = item.get("score")
+        if isinstance(score, (int, float)):
+            scores.append(float(score))
+    return scores
+
+
+def compute_entity_action_avg(
+    model_key: str,
+    idiom_id: int,
+    image_id: int,
+) -> float:
+    """Compute mean score across figurative/literal entities and actions.
+
+    Returns 0.0 if no valid scores are found.
+    """
+    config = get_model_config(model_key)
+    image_dir = config.get_output_path() / f"idiom_{idiom_id}" / f"image_{image_id}"
+    scores: List[float] = []
+
+    track_sources = [
+        (image_dir / "figurative.json", "figurative_track"),
+        (image_dir / "literal.json", "literal_track"),
+    ]
+
+    for path, track_key in track_sources:
+        if not path.exists():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            track_data = data.get(track_key, {})
+            scores.extend(_collect_entity_action_scores(track_data))
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            logger.warning(f"Failed to load track data {path}: {e}")
+
+    if not scores:
+        return 0.0
+    return sum(scores) / len(scores)
 
 
 @dataclass
@@ -228,6 +279,8 @@ def load_model_output(
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
+
+        entity_action_avg = compute_entity_action_avg(model_key, idiom_id, image_id)
         
         return ModelOutput(
             idiom_id=data["idiom_id"],
@@ -238,6 +291,7 @@ def load_model_output(
             literal_score=float(data.get("literal_score", 0.0)),
             s_pot=float(data.get("S_pot", 0.0)),
             s_fid=float(data.get("S_fid", 0.0)),
+            entity_action_avg=entity_action_avg,
         )
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning(f"Failed to load model output {path}: {e}")

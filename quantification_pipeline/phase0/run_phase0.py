@@ -38,6 +38,7 @@ from project_config import (
     PHASE0_IMAGEABILITY_PROMPT,
     PHASE0_TRANSPARENCY_PROMPT,
 )
+from quantification_pipeline.phase0.qwen_loader import load_qwen_model_and_tokenizer
 
 
 def get_timestamp() -> str:
@@ -180,28 +181,17 @@ class UnifiedPhase0Evaluator:
     
     def _load_model(self) -> None:
         """Load the model and tokenizer."""
-        import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM
-        
         # Get model class from registry
         from quantification_pipeline.phase0.imageability.config import get_model_class
         model_class = get_model_class(self.model_name)
         
         print(f"Loading model: {model_class.MODEL_ID}")
-        
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            model_class.MODEL_ID,
-            use_fast=True,
-            trust_remote_code=True,
+
+        self._model, self._tokenizer = load_qwen_model_and_tokenizer(
+            model_id=model_class.MODEL_ID,
+            device=self.device,
+            requested_dtype=None,
         )
-        
-        device_map = "auto" if self.device == "auto" else self.device
-        self._model = AutoModelForCausalLM.from_pretrained(
-            model_class.MODEL_ID,
-            torch_dtype=torch.float16,
-            device_map=device_map,
-            trust_remote_code=True,
-        ).eval()
         
         # Cache token IDs for "yes" and "no"
         self._yes_token_ids = self._tokenizer.encode("yes", add_special_tokens=False)
@@ -433,9 +423,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default="auto",
         choices=["cuda", "cpu", "auto"],
-        help="Device to run model on (default: cuda). Use 'auto' for multi-GPU offload.",
+        help="Device to run model on (default: auto). Use 'auto' for multi-GPU offload.",
     )
     
     parser.add_argument(

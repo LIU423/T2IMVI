@@ -80,6 +80,7 @@ SCORE_TYPES: Dict[str, str] = {
     "s_pot": "S_pot (Potential)",
     "s_fid": "S_fid (Fidelity)",
     "fig_lit_avg": "(Fig + Lit) / 2",
+    "entity_action_avg": "Entity+Action Avg",
 }
 
 
@@ -763,12 +764,13 @@ def run_experiment_i_multi_score(
     save_results: bool = True,
     results_dir: Optional[Path] = None,
 ) -> MultiScoreResults:
-    """Run Experiment I with all three score types for comparison.
+    """Run Experiment I with all score types for comparison.
     
     Runs the numerical scoring experiment with:
     - s_pot: Potential score
     - s_fid: Fidelity score  
     - fig_lit_avg: (figurative_score + literal_score) / 2
+    - entity_action_avg: mean of entity/action scores from figurative/literal tracks
     
     This allows direct comparison of how well each scoring method
     aligns with human judgment.
@@ -782,7 +784,7 @@ def run_experiment_i_multi_score(
         results_dir: Directory for results (default: RESULTS_PATH)
         
     Returns:
-        MultiScoreResults with results for all three score types
+        MultiScoreResults with results for all score types
     """
     logger.info(f"Starting Experiment I (Multi-Score) for model: {model_key}")
     logger.info(f"Score types: {list(SCORE_TYPES.keys())}")
@@ -1028,7 +1030,7 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
     ================================================================================
     EXPERIMENT I: MULTI-SCORE COMPARISON
     ================================================================================
-                              s_pot         s_fid      fig_lit_avg
+                              s_pot         s_fid      fig_lit_avg  entity_action_avg
     --------------------------------------------------------------------------------
     RBO (Standard)            0.xxxx        0.xxxx        0.xxxx
     RBO (Tie-Aware)           0.xxxx        0.xxxx        0.xxxx
@@ -1460,7 +1462,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--multi-score", "-M",
         action="store_true",
-        help="Compare all three score types (s_pot, s_fid, fig_lit_avg)"
+        help="Compare all score types (s_pot, s_fid, fig_lit_avg, entity_action_avg)"
     )
     
     args = parser.parse_args()

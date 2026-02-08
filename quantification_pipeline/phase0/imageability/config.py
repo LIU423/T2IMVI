@@ -84,7 +84,7 @@ class EvalConfig:
     
     # Model settings
     model_name: str = "qwen3-0.6b"
-    device: str = "cuda"
+    device: str = "auto"
     torch_dtype: str = "float16"  # "float16", "float32", "bfloat16"
     
     # Processing settings

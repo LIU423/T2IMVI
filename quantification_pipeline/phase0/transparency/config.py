@@ -55,6 +55,8 @@ def get_model_class(model_name: str) -> Type:
     """
     MODEL_REGISTRY = {
         "qwen3-0.6b": ("qwen_model", "Qwen3Model"),
+        "qwen3-30b-a3b-instruct-2507": ("qwen_model", "Qwen3_30B_A3B_Instruct_2507"),
+        "Qwen/Qwen3-30B-A3B-Instruct-2507": ("qwen_model", "Qwen3_30B_A3B_Instruct_2507"),
         # Add new models here:
         # "llama-7b": ("llama_model", "LlamaModel"),
         # "mistral-7b": ("mistral_model", "MistralModel"),
@@ -82,7 +84,7 @@ class EvalConfig:
     
     # Model settings
     model_name: str = "qwen3-0.6b"
-    device: str = "cuda"
+    device: str = "auto"
     torch_dtype: str = "float16"  # "float16", "float32", "bfloat16"
     
     # Processing settings

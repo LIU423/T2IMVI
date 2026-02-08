@@ -114,7 +114,7 @@ def get_model_output_dir(model_prefix: str = "qwen3_vl_8b", strategy: str = "T2I
     return OUTPUT_IRFL_DIR / f"{model_prefix}_{strategy}"
 
 
-def get_phase0_output_file(model_name: str = "Qwen3-235B-A22B-Instruct-2507-FP8") -> Path:
+def get_phase0_output_file(model_name: str = "test") -> Path:
     """
     Get the phase0 output file path for a specific model.
     

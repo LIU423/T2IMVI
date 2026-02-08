@@ -26,7 +26,6 @@ from typing import Dict, List, Any, Optional, Tuple
 
 from tqdm import tqdm
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 # Add project root to path
 _THIS_DIR = Path(__file__).parent.resolve()
@@ -39,6 +38,7 @@ from project_config import (
     OUTPUT_PHASE0_DIR,
     PROMPT_DIR,
 )
+from quantification_pipeline.phase0.qwen_loader import load_qwen_model_and_tokenizer
 
 # Add prompt directory to path for checklist imports
 if str(PROMPT_DIR) not in sys.path:
@@ -103,6 +103,7 @@ class ChecklistEvaluator:
         test_mode: bool = False,
         test_n_items: int = 1,
         save_interval: int = 10,
+        prompt_batch_size: int = 16,
     ):
         self.model_name = model_name
         self.model_id = self.MODEL_REGISTRY.get(model_name, model_name)
@@ -112,6 +113,7 @@ class ChecklistEvaluator:
         self.test_mode = test_mode
         self.test_n_items = test_n_items
         self.save_interval = save_interval
+        self.prompt_batch_size = prompt_batch_size
         
         # Results storage
         self._results: Dict[int, Dict[str, Any]] = {}
@@ -180,20 +182,16 @@ class ChecklistEvaluator:
     def _load_model(self) -> None:
         """Load the model and tokenizer."""
         print(f"Loading model: {self.model_id}")
-        
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self.model_id,
-            use_fast=True,
-            trust_remote_code=True,
+
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+        self._model, self._tokenizer = load_qwen_model_and_tokenizer(
+            model_id=self.model_id,
+            device=self.device,
+            requested_dtype=None,
         )
-        
-        device_map = "auto" if self.device == "auto" else self.device
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.model_id,
-            torch_dtype=torch.float16,
-            device_map=device_map,
-            trust_remote_code=True,
-        ).eval()
         
         # Cache token IDs for "yes" and "no"
         self._yes_token_ids = self._tokenizer.encode("yes", add_special_tokens=False)
@@ -261,6 +259,110 @@ class ChecklistEvaluator:
                 current_attention_mask = torch.cat([current_attention_mask, next_mask], dim=1)
         
         return total_log_prob
+
+    def _build_padded_sequences(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        target_token_ids: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        prompt_lens = attention_mask.sum(dim=1).to(torch.long)
+        sequences = []
+        masks = []
+
+        for i in range(input_ids.size(0)):
+            prompt_len = int(prompt_lens[i].item())
+            prompt_tokens = input_ids[i, :prompt_len]
+            seq = torch.cat([prompt_tokens, target_token_ids], dim=0)
+            mask = torch.ones(seq.size(0), device=input_ids.device, dtype=attention_mask.dtype)
+            sequences.append(seq)
+            masks.append(mask)
+
+        pad_id = self._tokenizer.pad_token_id
+        if pad_id is None:
+            pad_id = self._tokenizer.eos_token_id or 0
+
+        padded_ids = torch.nn.utils.rnn.pad_sequence(
+            sequences,
+            batch_first=True,
+            padding_value=pad_id,
+        )
+        padded_mask = torch.nn.utils.rnn.pad_sequence(
+            masks,
+            batch_first=True,
+            padding_value=0,
+        )
+
+        return padded_ids, padded_mask, prompt_lens
+
+    def _sequence_log_probs_batch(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        target_token_ids: List[int],
+    ) -> torch.Tensor:
+        target_ids = torch.tensor(target_token_ids, device=input_ids.device, dtype=torch.long)
+        padded_ids, padded_mask, prompt_lens = self._build_padded_sequences(
+            input_ids,
+            attention_mask,
+            target_ids,
+        )
+
+        outputs = self._model(
+            input_ids=padded_ids,
+            attention_mask=padded_mask,
+            use_cache=False,
+        )
+        log_probs = torch.nn.functional.log_softmax(outputs.logits, dim=-1)
+
+        target_len = target_ids.numel()
+        positions = (
+            torch.arange(target_len, device=input_ids.device).unsqueeze(0)
+            + (prompt_lens - 1).unsqueeze(1)
+        )
+        batch_idx = torch.arange(padded_ids.size(0), device=input_ids.device).unsqueeze(1)
+        token_ids = target_ids.unsqueeze(0).expand(padded_ids.size(0), target_len)
+
+        selected = log_probs[batch_idx, positions, token_ids]
+        return selected.sum(dim=1)
+
+    @torch.inference_mode()
+    def _compute_yes_prob_batch(self, prompts: List[str]) -> List[float]:
+        if not prompts:
+            return []
+
+        results: List[float] = []
+
+        for i in range(0, len(prompts), self.prompt_batch_size):
+            chunk = prompts[i : i + self.prompt_batch_size]
+            inputs = self._tokenizer(chunk, return_tensors="pt", padding=True)
+            input_ids = inputs["input_ids"].to(self._model.device)
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is None:
+                pad_id = self._tokenizer.pad_token_id
+                if pad_id is None:
+                    pad_id = self._tokenizer.eos_token_id or 0
+                attention_mask = (input_ids != pad_id).long()
+            attention_mask = attention_mask.to(self._model.device)
+
+            yes_log_probs = self._sequence_log_probs_batch(
+                input_ids,
+                attention_mask,
+                self._yes_token_ids,
+            )
+            no_log_probs = self._sequence_log_probs_batch(
+                input_ids,
+                attention_mask,
+                self._no_token_ids,
+            )
+
+            max_log_probs = torch.maximum(yes_log_probs, no_log_probs)
+            yes_exp = torch.exp(yes_log_probs - max_log_probs)
+            no_exp = torch.exp(no_log_probs - max_log_probs)
+            probs = yes_exp / (yes_exp + no_exp)
+            results.extend([p.item() for p in probs])
+
+        return results
     
     @torch.no_grad()
     def _compute_yes_prob(self, prompt: str) -> float:
@@ -295,10 +397,15 @@ class ChecklistEvaluator:
         """
         question_scores = {}
         
+        prompts = []
+        qids = []
         for qid, question_template in IMAGEABILITY_QUESTIONS:
             question = question_template.format(idiom=idiom)
-            prompt = self._format_chat_prompt(IMAGEABILITY_SYSTEM_PROMPT, question)
-            score = self._compute_yes_prob(prompt)
+            prompts.append(self._format_chat_prompt(IMAGEABILITY_SYSTEM_PROMPT, question))
+            qids.append(qid)
+
+        scores = self._compute_yes_prob_batch(prompts)
+        for qid, score in zip(qids, scores):
             question_scores[qid] = round(score, 6)
         
         # Arithmetic mean
@@ -315,10 +422,15 @@ class ChecklistEvaluator:
         """
         question_scores = {}
         
+        prompts = []
+        qids = []
         for qid, question_template in TRANSPARENCY_QUESTIONS:
             question = question_template.format(idiom=idiom, meaning=meaning)
-            prompt = self._format_chat_prompt(TRANSPARENCY_SYSTEM_PROMPT, question)
-            score = self._compute_yes_prob(prompt)
+            prompts.append(self._format_chat_prompt(TRANSPARENCY_SYSTEM_PROMPT, question))
+            qids.append(qid)
+
+        scores = self._compute_yes_prob_batch(prompts)
+        for qid, score in zip(qids, scores):
             question_scores[qid] = round(score, 6)
         
         # Arithmetic mean
@@ -463,8 +575,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-interval",
         type=int,
-        default=5,
+        default=1,
         help="Save checkpoint every N items (default: 10).",
+    )
+
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Resume from a specific checkpoint file (overrides timestamped path).",
+    )
+
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Output file path to use when resuming (optional).",
     )
     
     return parser.parse_args()
@@ -474,8 +600,27 @@ def main() -> int:
     """Main entry point."""
     args = parse_args()
     
-    timestamp = get_timestamp()
-    paths = setup_output_paths(args.model, timestamp)
+    if args.checkpoint:
+        checkpoint_path = Path(args.checkpoint).expanduser().resolve()
+        if args.output:
+            output_path = Path(args.output).expanduser().resolve()
+        else:
+            if checkpoint_path.name.endswith("_checkpoint.json"):
+                output_name = checkpoint_path.name.replace("_checkpoint.json", ".json")
+                output_path = checkpoint_path.parent.parent / output_name
+            else:
+                output_path = checkpoint_path.with_name(
+                    checkpoint_path.stem + "_output.json"
+                )
+
+        paths = {
+            "output_file": output_path,
+            "checkpoint_file": checkpoint_path,
+        }
+        timestamp = "resume"
+    else:
+        timestamp = get_timestamp()
+        paths = setup_output_paths(args.model, timestamp)
     
     print(f"Configuration:")
     print(f"  Model: {args.model}")

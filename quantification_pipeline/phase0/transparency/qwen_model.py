@@ -8,9 +8,9 @@ Qwen3-0.6B model from Hugging Face.
 import math
 from typing import Optional
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from .base_model import BaseTransparencyModel, LogitResult
+from ..qwen_loader import load_qwen_model_and_tokenizer
 
 
 class Qwen3Model(BaseTransparencyModel):
@@ -61,19 +61,11 @@ class Qwen3Model(BaseTransparencyModel):
             return
             
         print(f"Loading model: {self._model_id}")
-        
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            self._model_id,
-            use_fast=True,
-            trust_remote_code=True,
+        self._model, self._tokenizer = load_qwen_model_and_tokenizer(
+            model_id=self._model_id,
+            device=self._device,
+            requested_dtype=self._torch_dtype,
         )
-        
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self._model_id,
-            torch_dtype=self._torch_dtype,
-            device_map=self._device,
-            trust_remote_code=True,
-        ).eval()
         
         # Cache token ID sequences for "yes" and "no" (may be multi-token)
         self._yes_token_ids = self._get_token_ids("yes")
@@ -248,3 +240,13 @@ class Qwen3Model(BaseTransparencyModel):
                 current_attention_mask = torch.cat([current_attention_mask, next_mask], dim=1)
         
         return total_log_prob, logits_list
+
+
+class Qwen3_30B_A3B_Instruct_2507(Qwen3Model):
+    """
+    Qwen3-30B-A3B-Instruct-2507 model implementation.
+
+    Uses the same logic as Qwen3Model, with a different MODEL_ID.
+    """
+
+    MODEL_ID = "Qwen/Qwen3-30B-A3B-Instruct-2507"
