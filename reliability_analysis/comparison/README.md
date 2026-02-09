@@ -6,7 +6,8 @@ Run direct idiom-image scoring with a single prompt:
 
 ```bash
 python reliability_analysis/comparison/direct_vlm_scoring_baseline.py \
-  --model qwen3-vl-2b
+  --model qwen3-vl-2b \
+  --batch-size 4
 ```
 
 Prompt file can be:
@@ -27,6 +28,13 @@ Each image folder contains:
 Run-level timing summary:
 
 - `timing_direct_vlm_baseline.json` (average seconds per image, includes per-idiom stats)
+- `checkpoint_direct_vlm_baseline.json` (resume metadata for completed/failed items)
+
+Resume and progress:
+
+- By default, existing outputs are skipped and the run resumes from checkpoint/files.
+- Use `--overwrite` to force re-run all items from scratch.
+- Progress is shown with `tqdm` when available (otherwise periodic log updates).
 
 Model dirs:
 
@@ -46,6 +54,26 @@ Compare per-image average time between pipeline and direct baseline:
 python reliability_analysis/comparison/time_per_image_comparison.py \
   --model qwen3-vl-30b-a3b-instruct \
   --idiom-id 43 \
+  --batch-size 1 \
+  --run-direct-baseline
+```
+
+To force direct-baseline rerun instead of resume:
+
+```bash
+python reliability_analysis/comparison/time_per_image_comparison.py \
+  --model qwen3-vl-30b-a3b-instruct \
+  --idiom-id 43 \
+  --run-direct-baseline \
+  --overwrite-direct-baseline
+```
+
+Also supports batch idiom IDs:
+
+```bash
+python reliability_analysis/comparison/time_per_image_comparison.py \
+  --model qwen3-vl-30b-a3b-instruct \
+  --idiom-ids 489 47 553 \
   --run-direct-baseline
 ```
 

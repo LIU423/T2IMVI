@@ -15,13 +15,24 @@ import json
 import logging
 import math
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from PIL import Image
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
+
+# Ensure project-root imports (e.g., project_config) resolve when run as a script.
+_THIS_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _THIS_DIR.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from project_config import (
     INPUT_IRFL_MATCHED_IMAGES_DIR,
@@ -179,6 +190,90 @@ class Qwen3VLDirectScorer:
 
         raise ValueError("Cannot parse JSON from model response")
 
+    def _build_score_record_from_raw(self, raw: str, idiom: str) -> ScoreRecord:
+        parsed = self._extract_json_object(raw)
+        score = float(parsed["total_score"])
+        evidence = parsed.get("evidence", [])
+        if not isinstance(evidence, list):
+            evidence = []
+        evidence = [str(x) for x in evidence[:3]]
+        score = max(0.0, min(1.0, score))
+        idiom_echo = str(parsed.get("idiom", idiom))
+        return ScoreRecord(
+            idiom_id=-1,
+            image_id=-1,
+            idiom=idiom_echo,
+            total_score=score,
+            evidence=evidence,
+            raw_response=raw,
+        )
+
+    def _generate_raw_batch(self, images: List[Image.Image], prompts: List[str]) -> List[str]:
+        if self.model is None or self.processor is None:
+            raise RuntimeError("Model is not loaded")
+        if len(images) != len(prompts):
+            raise ValueError("images and prompts must have the same length")
+        if not images:
+            return []
+
+        messages_batch = [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": image},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ]
+            for image, prompt in zip(images, prompts)
+        ]
+        try:
+            inputs = self.processor.apply_chat_template(
+                messages_batch,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+            inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+            output = self.model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+            )
+            gen_ids = output[:, inputs["input_ids"].shape[-1] :]
+            return [x.strip() for x in self.processor.batch_decode(gen_ids, skip_special_tokens=True)]
+        except Exception:
+            # Compatibility fallback for processors that don't support batched chats.
+            outputs: List[str] = []
+            for image, prompt in zip(images, prompts):
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": image},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+                inputs = self.processor.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+                inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+                output = self.model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                )
+                gen_ids = output[:, inputs["input_ids"].shape[-1] :]
+                outputs.append(self.processor.batch_decode(gen_ids, skip_special_tokens=True)[0].strip())
+            return outputs
+
     def score(
         self,
         image: Image.Image,
@@ -221,22 +316,7 @@ class Qwen3VLDirectScorer:
             raw = self.processor.batch_decode(gen_ids, skip_special_tokens=True)[0].strip()
 
             try:
-                parsed = self._extract_json_object(raw)
-                score = float(parsed["total_score"])
-                evidence = parsed.get("evidence", [])
-                if not isinstance(evidence, list):
-                    evidence = []
-                evidence = [str(x) for x in evidence[:3]]
-                score = max(0.0, min(1.0, score))
-                idiom_echo = str(parsed.get("idiom", idiom))
-                return ScoreRecord(
-                    idiom_id=-1,
-                    image_id=-1,
-                    idiom=idiom_echo,
-                    total_score=score,
-                    evidence=evidence,
-                    raw_response=raw,
-                )
+                return self._build_score_record_from_raw(raw=raw, idiom=idiom)
             except Exception as exc:
                 last_error = exc
                 repair_hint = (
@@ -245,6 +325,51 @@ class Qwen3VLDirectScorer:
                 )
 
         raise ValueError(f"Failed to parse model response: {last_error}")
+
+    def score_batch(
+        self,
+        images: List[Image.Image],
+        idioms: List[str],
+        prompt_texts: List[str],
+        max_parse_retries: int,
+    ) -> List[ScoreRecord]:
+        if len(images) != len(idioms) or len(images) != len(prompt_texts):
+            raise ValueError("images, idioms, and prompt_texts must have same length")
+        if not images:
+            return []
+
+        records: List[Optional[ScoreRecord]] = [None] * len(images)
+        repair_hints = [""] * len(images)
+        pending_indices = list(range(len(images)))
+        last_error: Optional[Exception] = None
+
+        for _ in range(max_parse_retries):
+            current_images = [images[i] for i in pending_indices]
+            current_prompts = [prompt_texts[i].strip() + repair_hints[i] for i in pending_indices]
+            raws = self._generate_raw_batch(current_images, current_prompts)
+
+            next_pending: List[int] = []
+            for local_idx, global_idx in enumerate(pending_indices):
+                raw = raws[local_idx]
+                try:
+                    records[global_idx] = self._build_score_record_from_raw(
+                        raw=raw,
+                        idiom=idioms[global_idx],
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    repair_hints[global_idx] = (
+                        "\n\nIMPORTANT: Return STRICT JSON ONLY with keys "
+                        '{"idiom","total_score","evidence"} and valid numeric score in [0,1].'
+                    )
+                    next_pending.append(global_idx)
+            pending_indices = next_pending
+            if not pending_indices:
+                break
+
+        if pending_indices:
+            raise ValueError(f"Failed to parse model response: {last_error}")
+        return [record for record in records if record is not None]
 
 
 def parse_args() -> argparse.Namespace:
@@ -302,6 +427,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=220,
         help="Generation max_new_tokens",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Inference batch size for direct scoring.",
+    )
+    parser.add_argument(
+        "--checkpoint-file",
+        type=Path,
+        default=None,
+        help="Checkpoint file for resume metadata. Default: <output_dir>/checkpoint_direct_vlm_baseline.json",
+    )
+    parser.add_argument(
+        "--progress-log-interval",
+        type=int,
+        default=50,
+        help="Log progress every N images when tqdm is unavailable.",
     )
     parser.add_argument(
         "--max-parse-retries",
@@ -494,6 +637,43 @@ def _discover_images_for_idiom(idiom_id: int) -> List[Tuple[int, Path]]:
     return sorted(images, key=lambda x: x[0])
 
 
+def _chunked(items: List[Any], size: int) -> List[List[Any]]:
+    size = max(1, int(size))
+    return [items[i : i + size] for i in range(0, len(items), size)]
+
+
+def _item_key(idiom_id: int, image_id: int) -> str:
+    return f"{idiom_id}:{image_id}"
+
+
+def _load_checkpoint(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {"completed": [], "failed": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"completed": [], "failed": []}
+    if not isinstance(payload, dict):
+        return {"completed": [], "failed": []}
+    completed = payload.get("completed", [])
+    failed = payload.get("failed", [])
+    return {
+        "completed": completed if isinstance(completed, list) else [],
+        "failed": failed if isinstance(failed, list) else [],
+    }
+
+
+def _save_checkpoint(path: Path, completed_keys: List[str], failed_keys: List[str]) -> None:
+    payload = {
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "completed": completed_keys,
+        "failed": failed_keys,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
 def _build_total_score_payload(
     idiom_id: int,
     image_id: int,
@@ -521,14 +701,36 @@ def _build_total_score_payload(
 
 
 def run(args: argparse.Namespace) -> None:
+    args.batch_size = max(1, int(args.batch_size))
     prompt_spec = _load_prompt_spec(args.prompt_file)
 
     model_dir = MODEL_NAME_TO_DIR[args.model]
     output_base = args.output_root / model_dir
     output_base.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = (
+        args.checkpoint_file
+        if args.checkpoint_file is not None
+        else output_base / "checkpoint_direct_vlm_baseline.json"
+    )
 
     idiom_ids = args.idiom_ids if args.idiom_ids else _discover_idiom_ids()
     phase0_score_map = _load_phase0_score_map()
+
+    total_targets = 0
+    for idiom_id in idiom_ids:
+        images = _discover_images_for_idiom(idiom_id)
+        if args.max_images_per_idiom is not None:
+            images = images[: args.max_images_per_idiom]
+        total_targets += len(images)
+
+    completed_keys: Set[str] = set()
+    failed_keys: Set[str] = set()
+    if not args.overwrite:
+        ckpt = _load_checkpoint(checkpoint_path)
+        completed_keys = {str(x) for x in ckpt.get("completed", [])}
+        failed_keys = {str(x) for x in ckpt.get("failed", [])}
+        if completed_keys:
+            logger.info("Loaded checkpoint: %s completed entries from %s", len(completed_keys), checkpoint_path)
 
     scorer = Qwen3VLDirectScorer(
         model_name=args.model,
@@ -543,6 +745,29 @@ def run(args: argparse.Namespace) -> None:
     failed = 0
     timing_total_seconds = 0.0
     timing_per_idiom: Dict[int, Dict[str, float]] = {}
+    progress = tqdm(total=total_targets, desc="Direct baseline", unit="img") if tqdm else None
+    progress_counter = 0
+
+    def _progress_step() -> None:
+        nonlocal progress_counter
+        progress_counter += 1
+        if progress is not None:
+            progress.update(1)
+            progress.set_postfix(
+                processed=processed,
+                skipped=skipped,
+                failed=failed,
+                refresh=False,
+            )
+        elif progress_counter % max(1, int(args.progress_log_interval)) == 0:
+            logger.info(
+                "Progress %s/%s images (processed=%s, skipped=%s, failed=%s)",
+                progress_counter,
+                total_targets,
+                processed,
+                skipped,
+                failed,
+            )
 
     try:
         for idiom_id in idiom_ids:
@@ -561,79 +786,198 @@ def run(args: argparse.Namespace) -> None:
             idiom_text = _fallback_idiom_string(idiom_id, idiom_dir)
             logger.info("Processing idiom_%s (%s images)", idiom_id, len(images))
 
+            pending_items: List[Dict[str, Any]] = []
             for image_id, image_path in images:
                 out_dir = output_base / f"idiom_{idiom_id}" / f"image_{image_id}"
                 total_path = out_dir / "total_score.json"
                 detail_path = out_dir / "direct_vlm_baseline.json"
+                raw_path = out_dir / "raw_response.txt"
+                key = _item_key(idiom_id, image_id)
 
-                if total_path.exists() and detail_path.exists() and not args.overwrite:
+                if total_path.exists() and detail_path.exists() and raw_path.exists() and not args.overwrite:
                     skipped += 1
+                    completed_keys.add(key)
+                    _progress_step()
                     continue
-
                 metadata_path = image_path.with_suffix(".json")
                 maybe_phrase = _parse_phrase_from_metadata(metadata_path)
                 idiom_text_for_image = maybe_phrase or idiom_text
                 prompt_text = _render_prompt(prompt_spec, idiom_text_for_image)
+                pending_items.append(
+                    {
+                        "image_id": image_id,
+                        "image_path": image_path,
+                        "idiom_text": idiom_text_for_image,
+                        "prompt_text": prompt_text,
+                        "out_dir": out_dir,
+                        "total_path": total_path,
+                        "detail_path": detail_path,
+                    }
+                )
 
+            for batch_items in _chunked(pending_items, args.batch_size):
+                batch_start = time.perf_counter()
                 try:
-                    t0 = time.perf_counter()
-                    image = Image.open(image_path).convert("RGB")
-                    record = scorer.score(
-                        image=image,
-                        idiom=idiom_text_for_image,
-                        prompt_text=prompt_text,
+                    batch_images = [
+                        Image.open(item["image_path"]).convert("RGB")
+                        for item in batch_items
+                    ]
+                    batch_idioms = [str(item["idiom_text"]) for item in batch_items]
+                    batch_prompts = [str(item["prompt_text"]) for item in batch_items]
+                    records = scorer.score_batch(
+                        images=batch_images,
+                        idioms=batch_idioms,
+                        prompt_texts=batch_prompts,
                         max_parse_retries=args.max_parse_retries,
                     )
-                    record.idiom_id = idiom_id
-                    record.image_id = image_id
+                    elapsed_batch = time.perf_counter() - batch_start
+                    elapsed_per_image = elapsed_batch / len(batch_items)
 
-                    out_dir.mkdir(parents=True, exist_ok=True)
+                    for item, record in zip(batch_items, records):
+                        image_id = int(item["image_id"])
+                        out_dir = Path(item["out_dir"])
+                        total_path = Path(item["total_path"])
+                        detail_path = Path(item["detail_path"])
+                        record.idiom_id = idiom_id
+                        record.image_id = image_id
 
-                    payload = _build_total_score_payload(
-                        idiom_id=idiom_id,
-                        image_id=image_id,
-                        direct_score=record.total_score,
-                        phase0_scores=phase0_score_map.get(idiom_id),
-                    )
-                    with open(total_path, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, indent=2, ensure_ascii=False)
+                        out_dir.mkdir(parents=True, exist_ok=True)
 
-                    detail = {
-                        "idiom_id": idiom_id,
-                        "image_id": image_id,
-                        "idiom": record.idiom,
-                        "total_score": record.total_score,
-                        "evidence": record.evidence,
-                        "model_name": args.model,
-                        "model_id": MODEL_NAME_TO_ID[args.model],
-                    }
-                    with open(detail_path, "w", encoding="utf-8") as f:
-                        json.dump(detail, f, indent=2, ensure_ascii=False)
+                        payload = _build_total_score_payload(
+                            idiom_id=idiom_id,
+                            image_id=image_id,
+                            direct_score=record.total_score,
+                            phase0_scores=phase0_score_map.get(idiom_id),
+                        )
+                        with open(total_path, "w", encoding="utf-8") as f:
+                            json.dump(payload, f, indent=2, ensure_ascii=False)
 
-                    raw_path = out_dir / "raw_response.txt"
-                    with open(raw_path, "w", encoding="utf-8") as f:
-                        f.write(record.raw_response + "\n")
+                        detail = {
+                            "idiom_id": idiom_id,
+                            "image_id": image_id,
+                            "idiom": record.idiom,
+                            "total_score": record.total_score,
+                            "evidence": record.evidence,
+                            "model_name": args.model,
+                            "model_id": MODEL_NAME_TO_ID[args.model],
+                        }
+                        with open(detail_path, "w", encoding="utf-8") as f:
+                            json.dump(detail, f, indent=2, ensure_ascii=False)
 
-                    elapsed = time.perf_counter() - t0
-                    timing_total_seconds += elapsed
-                    idiom_timing = timing_per_idiom.setdefault(
+                        raw_path = out_dir / "raw_response.txt"
+                        with open(raw_path, "w", encoding="utf-8") as f:
+                            f.write(record.raw_response + "\n")
+
+                        timing_total_seconds += elapsed_per_image
+                        idiom_timing = timing_per_idiom.setdefault(
+                            idiom_id,
+                            {"processed_images": 0, "total_seconds": 0.0},
+                        )
+                        idiom_timing["processed_images"] += 1
+                        idiom_timing["total_seconds"] += elapsed_per_image
+                        processed += 1
+                        key = _item_key(idiom_id, image_id)
+                        completed_keys.add(key)
+                        if key in failed_keys:
+                            failed_keys.remove(key)
+                        _progress_step()
+                        _save_checkpoint(
+                            checkpoint_path,
+                            sorted(completed_keys),
+                            sorted(failed_keys),
+                        )
+                except Exception as batch_exc:
+                    logger.warning(
+                        "Batch failed for idiom_%s (batch_size=%s), fallback to single. error=%s",
                         idiom_id,
-                        {"processed_images": 0, "total_seconds": 0.0},
+                        len(batch_items),
+                        batch_exc,
                     )
-                    idiom_timing["processed_images"] += 1
-                    idiom_timing["total_seconds"] += elapsed
-                    processed += 1
-                except Exception as exc:
-                    failed += 1
-                    logger.error(
-                        "Failed idiom_%s image_%s (%s): %s",
-                        idiom_id,
-                        image_id,
-                        image_path.name,
-                        exc,
-                    )
+                    for item in batch_items:
+                        image_id = int(item["image_id"])
+                        image_path = Path(item["image_path"])
+                        idiom_text_for_image = str(item["idiom_text"])
+                        prompt_text = str(item["prompt_text"])
+                        out_dir = Path(item["out_dir"])
+                        total_path = Path(item["total_path"])
+                        detail_path = Path(item["detail_path"])
+                        try:
+                            t0 = time.perf_counter()
+                            image = Image.open(image_path).convert("RGB")
+                            record = scorer.score(
+                                image=image,
+                                idiom=idiom_text_for_image,
+                                prompt_text=prompt_text,
+                                max_parse_retries=args.max_parse_retries,
+                            )
+                            record.idiom_id = idiom_id
+                            record.image_id = image_id
+
+                            out_dir.mkdir(parents=True, exist_ok=True)
+                            payload = _build_total_score_payload(
+                                idiom_id=idiom_id,
+                                image_id=image_id,
+                                direct_score=record.total_score,
+                                phase0_scores=phase0_score_map.get(idiom_id),
+                            )
+                            with open(total_path, "w", encoding="utf-8") as f:
+                                json.dump(payload, f, indent=2, ensure_ascii=False)
+
+                            detail = {
+                                "idiom_id": idiom_id,
+                                "image_id": image_id,
+                                "idiom": record.idiom,
+                                "total_score": record.total_score,
+                                "evidence": record.evidence,
+                                "model_name": args.model,
+                                "model_id": MODEL_NAME_TO_ID[args.model],
+                            }
+                            with open(detail_path, "w", encoding="utf-8") as f:
+                                json.dump(detail, f, indent=2, ensure_ascii=False)
+
+                            raw_path = out_dir / "raw_response.txt"
+                            with open(raw_path, "w", encoding="utf-8") as f:
+                                f.write(record.raw_response + "\n")
+
+                            elapsed = time.perf_counter() - t0
+                            timing_total_seconds += elapsed
+                            idiom_timing = timing_per_idiom.setdefault(
+                                idiom_id,
+                                {"processed_images": 0, "total_seconds": 0.0},
+                            )
+                            idiom_timing["processed_images"] += 1
+                            idiom_timing["total_seconds"] += elapsed
+                            processed += 1
+                            key = _item_key(idiom_id, image_id)
+                            completed_keys.add(key)
+                            if key in failed_keys:
+                                failed_keys.remove(key)
+                            _progress_step()
+                            _save_checkpoint(
+                                checkpoint_path,
+                                sorted(completed_keys),
+                                sorted(failed_keys),
+                            )
+                        except Exception as exc:
+                            failed += 1
+                            failed_keys.add(_item_key(idiom_id, image_id))
+                            _progress_step()
+                            _save_checkpoint(
+                                checkpoint_path,
+                                sorted(completed_keys),
+                                sorted(failed_keys),
+                            )
+                            logger.error(
+                                "Failed idiom_%s image_%s (%s): %s",
+                                idiom_id,
+                                image_id,
+                                image_path.name,
+                                exc,
+                            )
     finally:
         scorer.unload()
+        if progress is not None:
+            progress.close()
 
     logger.info(
         "Done. processed=%s skipped=%s failed=%s output=%s",
@@ -656,6 +1000,7 @@ def run(args: argparse.Namespace) -> None:
         "phase": "comparison_direct_vlm_baseline",
         "model_name": args.model,
         "model_id": MODEL_NAME_TO_ID[args.model],
+        "batch_size": args.batch_size,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "output_dir": str(output_base),
         "processed_images": processed,
@@ -668,6 +1013,11 @@ def run(args: argparse.Namespace) -> None:
     timing_path = output_base / "timing_direct_vlm_baseline.json"
     with open(timing_path, "w", encoding="utf-8") as f:
         json.dump(timing_summary, f, indent=2, ensure_ascii=False)
+    _save_checkpoint(
+        checkpoint_path,
+        sorted(completed_keys),
+        sorted(failed_keys),
+    )
 
 
 def main() -> None:
