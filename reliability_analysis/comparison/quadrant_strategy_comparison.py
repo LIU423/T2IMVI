@@ -34,6 +34,18 @@ from quadrant_analysis.config import DEFAULT_SCORE_FIELDS, SCORE_FIELD_LABELS
 
 logger = logging.getLogger(__name__)
 
+THRESHOLD_PRESETS: Dict[str, Tuple[float, float]] = {
+    "default": (0.5, 0.5),
+    "strict": (0.6, 0.6),
+    "lenient": (0.4, 0.4),
+}
+RBO_P_PRESETS: Dict[str, float] = {
+    "default": DEFAULT_EXPERIMENT_CONFIG.rbo_p,
+    "top_heavy": 0.95,
+    "balanced": 0.9,
+    "flatter": 0.8,
+}
+
 
 def _mean_or_zero(values: List[float]) -> float:
     return statistics.mean(values) if values else 0.0
@@ -66,6 +78,34 @@ def _parse_idiom_ids(values: Optional[List[str]]) -> Optional[List[int]]:
             if token:
                 parsed.append(int(token))
     return sorted(set(parsed)) if parsed else None
+
+
+def _resolve_thresholds(
+    threshold_preset: str,
+    transparency_threshold: Optional[float],
+    imageability_threshold: Optional[float],
+) -> Tuple[float, float]:
+    if threshold_preset not in THRESHOLD_PRESETS:
+        raise ValueError(
+            f"Unknown threshold preset: {threshold_preset}. "
+            f"Available: {sorted(THRESHOLD_PRESETS.keys())}"
+        )
+    preset_t, preset_i = THRESHOLD_PRESETS[threshold_preset]
+    final_t = preset_t if transparency_threshold is None else transparency_threshold
+    final_i = preset_i if imageability_threshold is None else imageability_threshold
+    return final_t, final_i
+
+
+def _resolve_rbo_p(rbo_preset: str, rbo_p: Optional[float]) -> float:
+    if rbo_preset not in RBO_P_PRESETS:
+        raise ValueError(
+            f"Unknown rbo preset: {rbo_preset}. "
+            f"Available: {sorted(RBO_P_PRESETS.keys())}"
+        )
+    final_p = RBO_P_PRESETS[rbo_preset] if rbo_p is None else rbo_p
+    if not (0.0 < final_p < 1.0):
+        raise ValueError(f"Invalid rbo p: {final_p}. Must be in (0, 1).")
+    return final_p
 
 
 def _discover_model_idioms(model_path: Path) -> List[int]:
@@ -109,12 +149,8 @@ class ScoreAggregate:
     score_label: str
     n_idioms: int
     mean_rbo_standard: float
-    mean_rbo_tie_aware: float
-    mean_rbo_tie_aware_low_score_as_zero: float
-    mean_icc: float
-    mean_pearson_r: float
-    mean_mae: float
-    mean_normalized_mae: float
+    mean_ta_rbo: float
+    mean_tta_rbo: float
 
 
 @dataclass
@@ -134,12 +170,8 @@ class QuadrantDelta:
     score_label: str
     n_overlap_idioms: int
     delta_rbo_standard: float
-    delta_rbo_tie_aware: float
-    delta_rbo_tie_aware_low_score_as_zero: float
-    delta_icc: float
-    delta_pearson_r: float
-    delta_mae: float
-    delta_normalized_mae: float
+    delta_ta_rbo: float
+    delta_tta_rbo: float
 
 
 @dataclass
@@ -153,18 +185,10 @@ class ScoreSideBySide:
     t2imvi_n_idioms: int
     comparison_rbo_standard: float
     t2imvi_rbo_standard: float
-    comparison_rbo_tie_aware: float
-    t2imvi_rbo_tie_aware: float
-    comparison_rbo_tie_aware_low_score_as_zero: float
-    t2imvi_rbo_tie_aware_low_score_as_zero: float
-    comparison_icc: float
-    t2imvi_icc: float
-    comparison_pearson_r: float
-    t2imvi_pearson_r: float
-    comparison_mae: float
-    t2imvi_mae: float
-    comparison_normalized_mae: float
-    t2imvi_normalized_mae: float
+    comparison_ta_rbo: float
+    t2imvi_ta_rbo: float
+    comparison_tta_rbo: float
+    t2imvi_tta_rbo: float
 
 
 @dataclass
@@ -194,12 +218,8 @@ def _aggregate_group(
     low_score_zero_threshold: Optional[int],
 ) -> ScoreAggregate:
     rbo_std_vals: List[float] = []
-    rbo_tie_vals: List[float] = []
-    rbo_tie_low_vals: List[float] = []
-    icc_vals: List[float] = []
-    pearson_vals: List[float] = []
-    mae_vals: List[float] = []
-    nmae_vals: List[float] = []
+    ta_rbo_vals: List[float] = []
+    tta_rbo_vals: List[float] = []
 
     for idiom_id in idiom_ids:
         image_data = load_combined_data_for_idiom(idiom_id, [model_key])
@@ -217,24 +237,16 @@ def _aggregate_group(
         if result is None:
             continue
         rbo_std_vals.append(result.rbo_standard)
-        rbo_tie_vals.append(result.rbo_with_ties)
-        rbo_tie_low_vals.append(result.rbo_with_ties_low_score_as_zero)
-        icc_vals.append(result.icc)
-        pearson_vals.append(result.pearson_r)
-        mae_vals.append(result.mae)
-        nmae_vals.append(result.normalized_mae)
+        ta_rbo_vals.append(result.ta_rbo)
+        tta_rbo_vals.append(result.tta_rbo)
 
     return ScoreAggregate(
         score_field=score_field,
         score_label=SCORE_FIELD_LABELS.get(score_field, score_field),
         n_idioms=len(rbo_std_vals),
         mean_rbo_standard=_mean_or_zero(rbo_std_vals),
-        mean_rbo_tie_aware=_mean_or_zero(rbo_tie_vals),
-        mean_rbo_tie_aware_low_score_as_zero=_mean_or_zero(rbo_tie_low_vals),
-        mean_icc=_mean_or_zero(icc_vals),
-        mean_pearson_r=_mean_or_zero(pearson_vals),
-        mean_mae=_mean_or_zero(mae_vals),
-        mean_normalized_mae=_mean_or_zero(nmae_vals),
+        mean_ta_rbo=_mean_or_zero(ta_rbo_vals),
+        mean_tta_rbo=_mean_or_zero(tta_rbo_vals),
     )
 
 
@@ -366,18 +378,10 @@ def run_comparison(
                     t2imvi_n_idioms=t2_row.n_idioms,
                     comparison_rbo_standard=comparison_agg.mean_rbo_standard,
                     t2imvi_rbo_standard=t2_row.mean_rbo_standard,
-                    comparison_rbo_tie_aware=comparison_agg.mean_rbo_tie_aware,
-                    t2imvi_rbo_tie_aware=t2_row.mean_rbo_tie_aware,
-                    comparison_rbo_tie_aware_low_score_as_zero=comparison_agg.mean_rbo_tie_aware_low_score_as_zero,
-                    t2imvi_rbo_tie_aware_low_score_as_zero=t2_row.mean_rbo_tie_aware_low_score_as_zero,
-                    comparison_icc=comparison_agg.mean_icc,
-                    t2imvi_icc=t2_row.mean_icc,
-                    comparison_pearson_r=comparison_agg.mean_pearson_r,
-                    t2imvi_pearson_r=t2_row.mean_pearson_r,
-                    comparison_mae=comparison_agg.mean_mae,
-                    t2imvi_mae=t2_row.mean_mae,
-                    comparison_normalized_mae=comparison_agg.mean_normalized_mae,
-                    t2imvi_normalized_mae=t2_row.mean_normalized_mae,
+                    comparison_ta_rbo=comparison_agg.mean_ta_rbo,
+                    t2imvi_ta_rbo=t2_row.mean_ta_rbo,
+                    comparison_tta_rbo=comparison_agg.mean_tta_rbo,
+                    t2imvi_tta_rbo=t2_row.mean_tta_rbo,
                 )
             )
             delta_rows.append(
@@ -387,17 +391,8 @@ def run_comparison(
                     score_label=t2_row.score_label,
                     n_overlap_idioms=n_overlap,
                     delta_rbo_standard=comparison_agg.mean_rbo_standard - t2_row.mean_rbo_standard,
-                    delta_rbo_tie_aware=comparison_agg.mean_rbo_tie_aware - t2_row.mean_rbo_tie_aware,
-                    delta_rbo_tie_aware_low_score_as_zero=(
-                        comparison_agg.mean_rbo_tie_aware_low_score_as_zero
-                        - t2_row.mean_rbo_tie_aware_low_score_as_zero
-                    ),
-                    delta_icc=comparison_agg.mean_icc - t2_row.mean_icc,
-                    delta_pearson_r=comparison_agg.mean_pearson_r - t2_row.mean_pearson_r,
-                    delta_mae=comparison_agg.mean_mae - t2_row.mean_mae,
-                    delta_normalized_mae=(
-                        comparison_agg.mean_normalized_mae - t2_row.mean_normalized_mae
-                    ),
+                    delta_ta_rbo=comparison_agg.mean_ta_rbo - t2_row.mean_ta_rbo,
+                    delta_tta_rbo=comparison_agg.mean_tta_rbo - t2_row.mean_tta_rbo,
                 )
             )
 
@@ -465,8 +460,8 @@ def _print_summary(results: ComparisonResults, show_delta: bool = False) -> None
         print("\n" + "-" * 98)
         print(f"{quadrant}")
         print(
-            f"{'T2IMVI score':<18} {'n(c/t)':>8} {'RBO(c/t)':>20} {'RBO_tie(c/t)':>20} "
-            f"{'RBO_tie<=thr(c/t)':>22} {'ICC(c/t)':>18} {'MAE(c/t)':>18}"
+            f"{'T2IMVI score':<18} {'n(c/t)':>8} {'RBO(c/t)':>20} {'TA-RBO(c/t)':>20} "
+            f"{'TTA-RBO(c/t)':>20}"
         )
         print("-" * 98)
         for row in rows:
@@ -474,11 +469,8 @@ def _print_summary(results: ComparisonResults, show_delta: bool = False) -> None
                 f"{row.t2imvi_score_label:<18} "
                 f"{row.comparison_n_idioms:>3d}/{row.t2imvi_n_idioms:<3d} "
                 f"{row.comparison_rbo_standard:>9.4f}/{row.t2imvi_rbo_standard:<9.4f} "
-                f"{row.comparison_rbo_tie_aware:>9.4f}/{row.t2imvi_rbo_tie_aware:<9.4f} "
-                f"{row.comparison_rbo_tie_aware_low_score_as_zero:>9.4f}/"
-                f"{row.t2imvi_rbo_tie_aware_low_score_as_zero:<9.4f} "
-                f"{row.comparison_icc:>8.4f}/{row.t2imvi_icc:<8.4f} "
-                f"{row.comparison_mae:>8.4f}/{row.t2imvi_mae:<8.4f}"
+                f"{row.comparison_ta_rbo:>9.4f}/{row.t2imvi_ta_rbo:<9.4f} "
+                f"{row.comparison_tta_rbo:>9.4f}/{row.t2imvi_tta_rbo:<9.4f}"
             )
 
     if show_delta:
@@ -488,9 +480,8 @@ def _print_summary(results: ComparisonResults, show_delta: bool = False) -> None
         for delta in results.deltas_comparison_minus_t2imvi:
             print(
                 f"{delta.quadrant:>14} | {delta.score_label:<18} | n={delta.n_overlap_idioms:>3d} "
-                f"| dRBO={delta.delta_rbo_standard:+.4f} dRBO_tie={delta.delta_rbo_tie_aware:+.4f} "
-                f"dRBO_tie<=thr={delta.delta_rbo_tie_aware_low_score_as_zero:+.4f} "
-                f"dICC={delta.delta_icc:+.4f} dPearson={delta.delta_pearson_r:+.4f} dMAE={delta.delta_mae:+.4f}"
+                f"| dRBO={delta.delta_rbo_standard:+.4f} dTA-RBO={delta.delta_ta_rbo:+.4f} "
+                f"dTTA-RBO={delta.delta_tta_rbo:+.4f}"
             )
 
 
@@ -510,25 +501,13 @@ def _write_csv(results: ComparisonResults, csv_output: Path) -> None:
                 "t2imvi_n_idioms",
                 "comparison_rbo_standard",
                 "t2imvi_rbo_standard",
-                "comparison_rbo_tie_aware",
-                "t2imvi_rbo_tie_aware",
-                "comparison_rbo_tie_aware_low_score_as_zero",
-                "t2imvi_rbo_tie_aware_low_score_as_zero",
-                "comparison_icc",
-                "t2imvi_icc",
-                "comparison_pearson_r",
-                "t2imvi_pearson_r",
-                "comparison_mae",
-                "t2imvi_mae",
-                "comparison_normalized_mae",
-                "t2imvi_normalized_mae",
+                "comparison_ta_rbo",
+                "t2imvi_ta_rbo",
+                "comparison_tta_rbo",
+                "t2imvi_tta_rbo",
                 "delta_rbo_standard",
-                "delta_rbo_tie_aware",
-                "delta_rbo_tie_aware_low_score_as_zero",
-                "delta_icc",
-                "delta_pearson_r",
-                "delta_mae",
-                "delta_normalized_mae",
+                "delta_ta_rbo",
+                "delta_tta_rbo",
             ]
         )
         delta_map = {(d.quadrant, d.score_field): d for d in results.deltas_comparison_minus_t2imvi}
@@ -546,25 +525,13 @@ def _write_csv(results: ComparisonResults, csv_output: Path) -> None:
                     row.t2imvi_n_idioms,
                     row.comparison_rbo_standard,
                     row.t2imvi_rbo_standard,
-                    row.comparison_rbo_tie_aware,
-                    row.t2imvi_rbo_tie_aware,
-                    row.comparison_rbo_tie_aware_low_score_as_zero,
-                    row.t2imvi_rbo_tie_aware_low_score_as_zero,
-                    row.comparison_icc,
-                    row.t2imvi_icc,
-                    row.comparison_pearson_r,
-                    row.t2imvi_pearson_r,
-                    row.comparison_mae,
-                    row.t2imvi_mae,
-                    row.comparison_normalized_mae,
-                    row.t2imvi_normalized_mae,
+                    row.comparison_ta_rbo,
+                    row.t2imvi_ta_rbo,
+                    row.comparison_tta_rbo,
+                    row.t2imvi_tta_rbo,
                     delta.delta_rbo_standard if delta else "",
-                    delta.delta_rbo_tie_aware if delta else "",
-                    delta.delta_rbo_tie_aware_low_score_as_zero if delta else "",
-                    delta.delta_icc if delta else "",
-                    delta.delta_pearson_r if delta else "",
-                    delta.delta_mae if delta else "",
-                    delta.delta_normalized_mae if delta else "",
+                    delta.delta_ta_rbo if delta else "",
+                    delta.delta_tta_rbo if delta else "",
                 ]
             )
 
@@ -588,15 +555,44 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Idiom IDs, supports '--idiom-ids 1 2' and '--idiom-ids 1,2'. Default: all shared idioms.",
     )
-    parser.add_argument("--transparency-threshold", type=float, default=0.5)
-    parser.add_argument("--imageability-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--threshold-preset",
+        type=str,
+        default="default",
+        choices=sorted(THRESHOLD_PRESETS.keys()),
+        help="Threshold preset. You can still override either threshold explicitly.",
+    )
+    parser.add_argument(
+        "--transparency-threshold",
+        type=float,
+        default=None,
+        help="Transparency threshold override. Default comes from --threshold-preset.",
+    )
+    parser.add_argument(
+        "--imageability-threshold",
+        type=float,
+        default=None,
+        help="Imageability threshold override. Default comes from --threshold-preset.",
+    )
     parser.add_argument(
         "--low-score-zero-threshold",
         type=int,
         default=10,
         help="Human total scores <= threshold are collapsed to 0 for an extra tie-aware RBO metric.",
     )
-    parser.add_argument("--rbo-p", type=float, default=DEFAULT_EXPERIMENT_CONFIG.rbo_p)
+    parser.add_argument(
+        "--rbo-preset",
+        type=str,
+        default="default",
+        choices=sorted(RBO_P_PRESETS.keys()),
+        help="RBO p preset. You can still override with --rbo-p.",
+    )
+    parser.add_argument(
+        "--rbo-p",
+        type=float,
+        default=None,
+        help="RBO p override. Must be in (0,1). Default comes from --rbo-preset.",
+    )
     parser.add_argument(
         "--comparison-score-field",
         type=str,
@@ -632,6 +628,15 @@ def main() -> None:
     args = parser.parse_args()
 
     idiom_ids = _parse_idiom_ids(args.idiom_ids)
+    transparency_threshold, imageability_threshold = _resolve_thresholds(
+        threshold_preset=args.threshold_preset,
+        transparency_threshold=args.transparency_threshold,
+        imageability_threshold=args.imageability_threshold,
+    )
+    rbo_p = _resolve_rbo_p(
+        rbo_preset=args.rbo_preset,
+        rbo_p=args.rbo_p,
+    )
     comparison_score_field = args.comparison_score_field.strip()
     t2imvi_score_fields = [x.strip() for x in args.t2imvi_score_fields.split(",") if x.strip()]
 
@@ -640,10 +645,10 @@ def main() -> None:
         model_dir=args.model_dir,
         t2imvi_model_dir=args.t2imvi_model_dir,
         idiom_ids=idiom_ids,
-        transparency_threshold=args.transparency_threshold,
-        imageability_threshold=args.imageability_threshold,
+        transparency_threshold=transparency_threshold,
+        imageability_threshold=imageability_threshold,
         low_score_zero_threshold=args.low_score_zero_threshold,
-        rbo_p=args.rbo_p,
+        rbo_p=rbo_p,
         comparison_score_field=comparison_score_field,
         t2imvi_score_fields=t2imvi_score_fields,
         quadrant_anchor=args.quadrant_anchor,

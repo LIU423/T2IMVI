@@ -40,10 +40,8 @@ class ScoreFieldAggregate:
     score_label: str
     n_idioms: int
     mean_rbo_standard: float
-    mean_rbo_tie_aware: float
-    mean_icc: float
-    mean_pearson_r: float
-    mean_mae: float
+    mean_ta_rbo: float
+    mean_tta_rbo: float
 
 
 @dataclass
@@ -150,10 +148,8 @@ def _aggregate_one_group_one_score(
     rbo_p: float,
 ) -> ScoreFieldAggregate:
     rbo_std_vals: List[float] = []
-    rbo_tie_vals: List[float] = []
-    icc_vals: List[float] = []
-    pearson_vals: List[float] = []
-    mae_vals: List[float] = []
+    ta_rbo_vals: List[float] = []
+    tta_rbo_vals: List[float] = []
 
     for idiom_id in idiom_ids:
         image_data = load_combined_data_for_idiom(idiom_id, [model_key])
@@ -172,20 +168,16 @@ def _aggregate_one_group_one_score(
             continue
 
         rbo_std_vals.append(result.rbo_standard)
-        rbo_tie_vals.append(result.rbo_with_ties)
-        icc_vals.append(result.icc)
-        pearson_vals.append(result.pearson_r)
-        mae_vals.append(result.mae)
+        ta_rbo_vals.append(result.ta_rbo)
+        tta_rbo_vals.append(result.tta_rbo)
 
     return ScoreFieldAggregate(
         score_field=score_field,
         score_label=SCORE_FIELD_LABELS.get(score_field, score_field),
         n_idioms=len(rbo_std_vals),
         mean_rbo_standard=_mean_or_zero(rbo_std_vals),
-        mean_rbo_tie_aware=_mean_or_zero(rbo_tie_vals),
-        mean_icc=_mean_or_zero(icc_vals),
-        mean_pearson_r=_mean_or_zero(pearson_vals),
-        mean_mae=_mean_or_zero(mae_vals),
+        mean_ta_rbo=_mean_or_zero(ta_rbo_vals),
+        mean_tta_rbo=_mean_or_zero(tta_rbo_vals),
     )
 
 
@@ -276,16 +268,14 @@ def print_quadrant_summary(results: QuadrantAnalysisResults) -> None:
         print("\n" + "-" * 86)
         print(f"{quad.quadrant} | idioms={quad.n_idioms}")
         header = (
-            f"{'Score':<20} {'n':>4} {'RBO':>10} {'RBO_Tie':>10} "
-            f"{'ICC':>10} {'Pearson':>10} {'MAE':>10}"
+            f"{'Score':<20} {'n':>4} {'RBO':>10} {'TA-RBO':>10} {'TTA-RBO':>10}"
         )
         print(header)
         print("-" * len(header))
         for row in quad.score_field_results:
             print(
                 f"{row.score_label:<20} {row.n_idioms:>4d} "
-                f"{row.mean_rbo_standard:>10.4f} {row.mean_rbo_tie_aware:>10.4f} "
-                f"{row.mean_icc:>10.4f} {row.mean_pearson_r:>10.4f} {row.mean_mae:>10.4f}"
+                f"{row.mean_rbo_standard:>10.4f} {row.mean_ta_rbo:>10.4f} {row.mean_tta_rbo:>10.4f}"
             )
 
 

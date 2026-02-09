@@ -35,6 +35,7 @@ from config import (
 from data_loader import (
     discover_idioms,
     load_combined_data_for_idiom,
+    load_all_annotations_for_idiom,
     ImageData,
 )
 from classification import (
@@ -54,15 +55,7 @@ from metrics import (
     calculate_rbo_detailed,
     RBOResult,
     extract_class_sequence,
-    # New metrics imports
     rbo_with_ties,
-    calculate_rbo_with_ties_detailed,
-    pearson_correlation,
-    mae,
-    normalized_mae,
-    icc_from_pairs,
-    calculate_experiment_i_metrics,
-    ExperimentIMetrics,
 )
 
 # Configure logging
@@ -137,15 +130,7 @@ class IdiomNumericalRankingResult:
         
         # RBO metrics
         rbo_standard: Standard RBO (ignoring ties)
-        rbo_with_ties: RBO accounting for tied human scores
-        
-        # Correlation metrics
-        icc: Intraclass Correlation Coefficient
-        pearson_r: Pearson correlation coefficient
-        
-        # Error metrics
-        mae: Mean Absolute Error
-        normalized_mae: Normalized MAE (0-1 scale)
+        ta_rbo: Tie-aware RBO accounting for tied human scores
         
         # Tie information
         num_tie_groups: Number of score groups with multiple images
@@ -161,16 +146,8 @@ class IdiomNumericalRankingResult:
     
     # RBO metrics
     rbo_standard: float
-    rbo_with_ties: float
-    rbo_with_ties_low_score_as_zero: float
-    
-    # Correlation metrics
-    icc: float
-    pearson_r: float
-    
-    # Error metrics
-    mae: float
-    normalized_mae: float
+    ta_rbo: float
+    tta_rbo: float
     
     # Tie information
     num_tie_groups: int
@@ -218,6 +195,7 @@ class ExperimentINumericalResults:
     rbo_p: float
     timestamp: str
     scoring_weights: Dict[str, int]  # The label weights used
+    krippendorff_alpha: Optional[float]
     idiom_results: List[IdiomNumericalRankingResult]
     aggregate_stats: Dict[str, float]
 
@@ -239,6 +217,7 @@ class MultiScoreResults:
     rbo_p: float
     timestamp: str
     scoring_weights: Dict[str, int]
+    krippendorff_alpha: Optional[float]
     results_by_score_type: Dict[str, ExperimentINumericalResults]
 
 
@@ -374,8 +353,7 @@ def compare_rankings_numerical(
         logger.warning(f"Idiom {idiom_id}: Empty ranking lists")
         return None
     
-    # Prepare data for metrics calculation
-    # Align scores by image ID (same order for both lists)
+    # Ensure both rankings overlap on enough items.
     aligned_image_ids = [
         img_id for img_id in human_ranked.ranked_image_ids 
         if img_id in model_score_map
@@ -385,39 +363,20 @@ def compare_rankings_numerical(
         logger.warning(f"Idiom {idiom_id}: Not enough aligned images")
         return None
     
-    # Get aligned scores
-    human_scores = [float(human_ranked.image_scores[img_id]) for img_id in aligned_image_ids]
-    
-    # Normalize model scores to human score scale (0-100)
-    # Model scores are typically 0-1, so multiply by 100
-    raw_model_scores = [model_score_map[img_id] for img_id in aligned_image_ids]
-    max_model_score = max(raw_model_scores) if raw_model_scores else 1.0
-    min_model_score = min(raw_model_scores) if raw_model_scores else 0.0
-    score_range = max_model_score - min_model_score
-    
-    if score_range > 0:
-        # Normalize to 0-100 range
-        model_scores = [
-            ((s - min_model_score) / score_range) * 100.0 
-            for s in raw_model_scores
-        ]
-    else:
-        model_scores = [50.0] * len(raw_model_scores)  # All same score
-    
-    # Prepare tie groups for RBO calculation
+    # Prepare tie groups for RBO calculation.
     tie_groups = [
         (tg.score, tg.image_ids) for tg in human_ranked.tie_groups
     ]
     
-    # Calculate all metrics
+    # Calculate RBO metrics only.
     rbo_standard = rbo(human_ranked.ranked_image_ids, model_ranking_ids, rbo_p)
-    rbo_ties = rbo_with_ties(
+    ta_rbo = rbo_with_ties(
         human_ranked.ranked_image_ids, 
         model_ranking_ids, 
         tie_groups, 
         rbo_p
     )
-    rbo_ties_low_score_as_zero = rbo_ties
+    tta_rbo = ta_rbo
     if low_score_zero_threshold is not None:
         adjusted_score_to_images: Dict[int, List[int]] = {}
         for image_id in human_ranked.ranked_image_ids:
@@ -434,17 +393,12 @@ def compare_rankings_numerical(
             adjusted_ranked_ids.extend(image_ids)
             adjusted_tie_groups.append((score, image_ids))
 
-        rbo_ties_low_score_as_zero = rbo_with_ties(
+        tta_rbo = rbo_with_ties(
             adjusted_ranked_ids,
             model_ranking_ids,
             adjusted_tie_groups,
             rbo_p,
         )
-    
-    icc_value = icc_from_pairs(human_scores, model_scores, "ICC(2,1)")
-    pearson_value = pearson_correlation(human_scores, model_scores)
-    mae_raw = mae(human_scores, model_scores)
-    mae_norm = normalized_mae(human_scores, model_scores, 100.0)  # Max possible = 100
     
     # Count tie groups (groups with >1 image)
     num_tie_groups = sum(1 for tg in human_ranked.tie_groups if len(tg.image_ids) > 1)
@@ -455,12 +409,8 @@ def compare_rankings_numerical(
         model_key=model_key,
         score_field=score_field,
         rbo_standard=rbo_standard,
-        rbo_with_ties=rbo_ties,
-        rbo_with_ties_low_score_as_zero=rbo_ties_low_score_as_zero,
-        icc=icc_value,
-        pearson_r=pearson_value,
-        mae=mae_raw,
-        normalized_mae=mae_norm,
+        ta_rbo=ta_rbo,
+        tta_rbo=tta_rbo,
         num_tie_groups=num_tie_groups,
         human_ranking_ids=human_ranked.ranked_image_ids,
         model_ranking_ids=model_ranking_ids,
@@ -470,6 +420,73 @@ def compare_rankings_numerical(
 # =============================================================================
 # EXPERIMENT EXECUTION
 # =============================================================================
+
+def calculate_krippendorff_alpha_for_irfl(
+    idiom_ids: List[int],
+    scoring_config: ScoringConfig,
+    expected_raters: int = 5,
+) -> Optional[float]:
+    """Compute Krippendorff's Alpha (ordinal) from IRFL annotations.
+
+    Uses ordinal indices derived from scoring weights to preserve label order.
+    """
+    try:
+        import numpy as np
+        import krippendorff
+    except ImportError as exc:
+        logger.warning("Skip Krippendorff alpha: missing dependency (%s)", exc)
+        return None
+
+    # Convert weight-based labels into ordinal ranks: 0..N-1
+    ordered_labels = sorted(
+        scoring_config.weights.items(),
+        key=lambda item: item[1],
+    )
+    ordinal_map = {label: idx for idx, (label, _weight) in enumerate(ordered_labels)}
+    value_domain = list(range(len(ordinal_map)))
+
+    rater_data: List[List[float]] = [[] for _ in range(expected_raters)]
+    total_images = 0
+    skipped_bad_rater_count = 0
+    skipped_unknown_label = 0
+
+    for idiom_id in idiom_ids:
+        for annotation in load_all_annotations_for_idiom(idiom_id):
+            if len(annotation.annotations) != expected_raters:
+                skipped_bad_rater_count += 1
+                continue
+            total_images += 1
+
+            for i, label in enumerate(annotation.annotations):
+                clean_label = label.strip()
+                if clean_label in ordinal_map:
+                    rater_data[i].append(float(ordinal_map[clean_label]))
+                else:
+                    skipped_unknown_label += 1
+                    rater_data[i].append(np.nan)
+
+    if total_images == 0:
+        logger.warning("Skip Krippendorff alpha: no valid annotations found")
+        return None
+
+    try:
+        alpha = krippendorff.alpha(
+            reliability_data=np.array(rater_data, dtype=float),
+            level_of_measurement="ordinal",
+            value_domain=value_domain,
+        )
+    except Exception as exc:
+        logger.warning("Krippendorff alpha calculation failed: %s", exc)
+        return None
+
+    logger.info(
+        "Krippendorff alpha (ordinal) = %.4f | images=%d | skipped_bad_raters=%d | unknown_labels=%d",
+        alpha,
+        total_images,
+        skipped_bad_rater_count,
+        skipped_unknown_label,
+    )
+    return float(alpha)
 
 def run_experiment_i(
     model_key: str,
@@ -608,6 +625,7 @@ def run_experiment_i_numerical(
     idiom_ids: Optional[List[int]] = None,
     config: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG,
     scoring_config: ScoringConfig = DEFAULT_SCORING_CONFIG,
+    precomputed_krippendorff_alpha: Optional[float] = None,
     save_results: bool = True,
     results_dir: Optional[Path] = None,
 ) -> ExperimentINumericalResults:
@@ -618,11 +636,8 @@ def run_experiment_i_numerical(
       Partial Literal = 5, None = 0
     - Human score = sum of 5 annotation weights (range 0-100)
     
-    Calculates multiple metrics:
+    Calculates RBO metrics:
     - RBO (standard and tie-aware)
-    - ICC (Intraclass Correlation Coefficient)
-    - Pearson correlation
-    - MAE (Mean Absolute Error)
     
     Args:
         model_key: Which model to evaluate
@@ -630,6 +645,7 @@ def run_experiment_i_numerical(
         idiom_ids: Specific idioms to process (default: all)
         config: Experiment configuration
         scoring_config: Configuration for annotation weights
+        precomputed_krippendorff_alpha: Optional precomputed alpha value
         save_results: Whether to save results to file
         results_dir: Directory for results (default: RESULTS_PATH)
         
@@ -648,6 +664,13 @@ def run_experiment_i_numerical(
     if idiom_ids is None:
         idiom_ids = discover_idioms()
     
+    krippendorff_alpha = precomputed_krippendorff_alpha
+    if krippendorff_alpha is None:
+        krippendorff_alpha = calculate_krippendorff_alpha_for_irfl(
+            idiom_ids=idiom_ids,
+            scoring_config=scoring_config,
+        )
+
     logger.info(f"Processing {len(idiom_ids)} idioms...")
     
     # Process each idiom
@@ -689,6 +712,7 @@ def run_experiment_i_numerical(
         rbo_p=config.rbo_p,
         timestamp=datetime.now().isoformat(),
         scoring_weights=scoring_config.weights,
+        krippendorff_alpha=krippendorff_alpha,
         idiom_results=idiom_results,
         aggregate_stats=aggregate_stats,
     )
@@ -716,22 +740,14 @@ def calculate_aggregate_stats_numerical(
             "count": 0,
             "total_images": 0,
             "mean_rbo_standard": 0.0,
-            "mean_rbo_with_ties": 0.0,
-            "mean_rbo_with_ties_low_score_as_zero": 0.0,
-            "mean_icc": 0.0,
-            "mean_pearson": 0.0,
-            "mean_mae": 0.0,
-            "mean_normalized_mae": 0.0,
+            "mean_ta_rbo": 0.0,
+            "mean_tta_rbo": 0.0,
         }
     
     # Extract metrics lists
     rbo_standard = [r.rbo_standard for r in idiom_results]
-    rbo_ties = [r.rbo_with_ties for r in idiom_results]
-    rbo_ties_low_score_as_zero = [r.rbo_with_ties_low_score_as_zero for r in idiom_results]
-    icc_vals = [r.icc for r in idiom_results]
-    pearson_vals = [r.pearson_r for r in idiom_results]
-    mae_vals = [r.mae for r in idiom_results]
-    mae_norm_vals = [r.normalized_mae for r in idiom_results]
+    ta_rbo_vals = [r.ta_rbo for r in idiom_results]
+    tta_rbo_vals = [r.tta_rbo for r in idiom_results]
     
     total_images = sum(r.num_images for r in idiom_results)
     total_tie_groups = sum(r.num_tie_groups for r in idiom_results)
@@ -749,46 +765,18 @@ def calculate_aggregate_stats_numerical(
         "median_rbo_standard": statistics.median(rbo_standard),
         
         # RBO with Ties
-        "mean_rbo_with_ties": statistics.mean(rbo_ties),
-        "std_rbo_with_ties": statistics.stdev(rbo_ties) if len(rbo_ties) > 1 else 0.0,
-        "min_rbo_with_ties": min(rbo_ties),
-        "max_rbo_with_ties": max(rbo_ties),
-        "median_rbo_with_ties": statistics.median(rbo_ties),
-        "mean_rbo_with_ties_low_score_as_zero": statistics.mean(rbo_ties_low_score_as_zero),
-        "std_rbo_with_ties_low_score_as_zero": (
-            statistics.stdev(rbo_ties_low_score_as_zero) if len(rbo_ties_low_score_as_zero) > 1 else 0.0
+        "mean_ta_rbo": statistics.mean(ta_rbo_vals),
+        "std_ta_rbo": statistics.stdev(ta_rbo_vals) if len(ta_rbo_vals) > 1 else 0.0,
+        "min_ta_rbo": min(ta_rbo_vals),
+        "max_ta_rbo": max(ta_rbo_vals),
+        "median_ta_rbo": statistics.median(ta_rbo_vals),
+        "mean_tta_rbo": statistics.mean(tta_rbo_vals),
+        "std_tta_rbo": (
+            statistics.stdev(tta_rbo_vals) if len(tta_rbo_vals) > 1 else 0.0
         ),
-        "min_rbo_with_ties_low_score_as_zero": min(rbo_ties_low_score_as_zero),
-        "max_rbo_with_ties_low_score_as_zero": max(rbo_ties_low_score_as_zero),
-        "median_rbo_with_ties_low_score_as_zero": statistics.median(rbo_ties_low_score_as_zero),
-        
-        # ICC
-        "mean_icc": statistics.mean(icc_vals),
-        "std_icc": statistics.stdev(icc_vals) if len(icc_vals) > 1 else 0.0,
-        "min_icc": min(icc_vals),
-        "max_icc": max(icc_vals),
-        "median_icc": statistics.median(icc_vals),
-        
-        # Pearson
-        "mean_pearson": statistics.mean(pearson_vals),
-        "std_pearson": statistics.stdev(pearson_vals) if len(pearson_vals) > 1 else 0.0,
-        "min_pearson": min(pearson_vals),
-        "max_pearson": max(pearson_vals),
-        "median_pearson": statistics.median(pearson_vals),
-        
-        # MAE (raw)
-        "mean_mae": statistics.mean(mae_vals),
-        "std_mae": statistics.stdev(mae_vals) if len(mae_vals) > 1 else 0.0,
-        "min_mae": min(mae_vals),
-        "max_mae": max(mae_vals),
-        "median_mae": statistics.median(mae_vals),
-        
-        # Normalized MAE
-        "mean_normalized_mae": statistics.mean(mae_norm_vals),
-        "std_normalized_mae": statistics.stdev(mae_norm_vals) if len(mae_norm_vals) > 1 else 0.0,
-        "min_normalized_mae": min(mae_norm_vals),
-        "max_normalized_mae": max(mae_norm_vals),
-        "median_normalized_mae": statistics.median(mae_norm_vals),
+        "min_tta_rbo": min(tta_rbo_vals),
+        "max_tta_rbo": max(tta_rbo_vals),
+        "median_tta_rbo": statistics.median(tta_rbo_vals),
     }
     
     return stats
@@ -826,6 +814,14 @@ def run_experiment_i_multi_score(
     """
     logger.info(f"Starting Experiment I (Multi-Score) for model: {model_key}")
     logger.info(f"Score types: {list(SCORE_TYPES.keys())}")
+
+    if idiom_ids is None:
+        idiom_ids = discover_idioms()
+
+    krippendorff_alpha = calculate_krippendorff_alpha_for_irfl(
+        idiom_ids=idiom_ids,
+        scoring_config=scoring_config,
+    )
     
     results_by_score_type: Dict[str, ExperimentINumericalResults] = {}
     
@@ -838,6 +834,7 @@ def run_experiment_i_multi_score(
             idiom_ids=idiom_ids,
             config=config,
             scoring_config=scoring_config,
+            precomputed_krippendorff_alpha=krippendorff_alpha,
             save_results=save_results,
             results_dir=results_dir,
         )
@@ -849,6 +846,7 @@ def run_experiment_i_multi_score(
         rbo_p=config.rbo_p,
         timestamp=datetime.now().isoformat(),
         scoring_weights=scoring_config.weights,
+        krippendorff_alpha=krippendorff_alpha,
         results_by_score_type=results_by_score_type,
     )
     
@@ -888,6 +886,7 @@ def save_multi_score_results(
         "rbo_p": results.rbo_p,
         "timestamp": results.timestamp,
         "scoring_weights": results.scoring_weights,
+        "krippendorff_alpha": results.krippendorff_alpha,
         "score_types": list(SCORE_TYPES.keys()),
         "comparison": {},
     }
@@ -897,11 +896,8 @@ def save_multi_score_results(
         stats = exp_results.aggregate_stats
         comparison_data["comparison"][score_type] = {
             "rbo_standard": stats.get("mean_rbo_standard", 0.0),
-            "rbo_with_ties": stats.get("mean_rbo_with_ties", 0.0),
-            "icc": stats.get("mean_icc", 0.0),
-            "pearson": stats.get("mean_pearson", 0.0),
-            "mae": stats.get("mean_mae", 0.0),
-            "normalized_mae": stats.get("mean_normalized_mae", 0.0),
+            "ta_rbo": stats.get("mean_ta_rbo", 0.0),
+            "tta_rbo": stats.get("mean_tta_rbo", 0.0),
             "count": stats.get("count", 0),
         }
     
@@ -943,6 +939,7 @@ def save_numerical_experiment_results(
         "rbo_p": results.rbo_p,
         "timestamp": results.timestamp,
         "scoring_weights": results.scoring_weights,
+        "krippendorff_alpha": results.krippendorff_alpha,
         "aggregate_stats": results.aggregate_stats,
         "idiom_results": [asdict(r) for r in results.idiom_results],
     }
@@ -960,6 +957,7 @@ def save_numerical_experiment_results(
         "rbo_p": results.rbo_p,
         "timestamp": results.timestamp,
         "scoring_weights": results.scoring_weights,
+        "krippendorff_alpha": results.krippendorff_alpha,
         "aggregate_stats": results.aggregate_stats,
     }
     
@@ -985,6 +983,19 @@ def print_numerical_experiment_summary(results: ExperimentINumericalResults) -> 
     print(f"RBO Parameter (p): {results.rbo_p}")
     print(f"Timestamp: {results.timestamp}")
     print(f"\nScoring Weights: {results.scoring_weights}")
+    if results.krippendorff_alpha is None:
+        print("Krippendorff's Alpha (ordinal): N/A")
+    else:
+        alpha = results.krippendorff_alpha
+        if alpha >= 0.8:
+            alpha_interp = "Excellent"
+        elif alpha >= 0.667:
+            alpha_interp = "Substantial"
+        elif alpha >= 0.4:
+            alpha_interp = "Moderate"
+        else:
+            alpha_interp = "Poor"
+        print(f"Krippendorff's Alpha (ordinal): {alpha:.4f} ({alpha_interp})")
     
     print("\n--- Data Statistics ---")
     print(f"  Idioms processed: {stats.get('count', 0)}")
@@ -998,31 +1009,19 @@ def print_numerical_experiment_summary(results: ExperimentINumericalResults) -> 
     print(f"  Range:  [{stats.get('min_rbo_standard', 0):.4f}, {stats.get('max_rbo_standard', 0):.4f}]")
     
     print("\n--- RBO Scores (Tie-Aware) ---")
-    print(f"  Mean:   {stats.get('mean_rbo_with_ties', 0):.4f}")
-    print(f"  Std:    {stats.get('std_rbo_with_ties', 0):.4f}")
-    print(f"  Median: {stats.get('median_rbo_with_ties', 0):.4f}")
-    print(f"  Range:  [{stats.get('min_rbo_with_ties', 0):.4f}, {stats.get('max_rbo_with_ties', 0):.4f}]")
-    
-    print("\n--- ICC (Intraclass Correlation) ---")
-    print(f"  Mean:   {stats.get('mean_icc', 0):.4f}")
-    print(f"  Std:    {stats.get('std_icc', 0):.4f}")
-    print(f"  Median: {stats.get('median_icc', 0):.4f}")
-    print(f"  Range:  [{stats.get('min_icc', 0):.4f}, {stats.get('max_icc', 0):.4f}]")
-    
-    print("\n--- Pearson Correlation ---")
-    print(f"  Mean:   {stats.get('mean_pearson', 0):.4f}")
-    print(f"  Std:    {stats.get('std_pearson', 0):.4f}")
-    print(f"  Median: {stats.get('median_pearson', 0):.4f}")
-    print(f"  Range:  [{stats.get('min_pearson', 0):.4f}, {stats.get('max_pearson', 0):.4f}]")
-    
-    print("\n--- MAE (Mean Absolute Error) ---")
-    print(f"  Mean (raw):        {stats.get('mean_mae', 0):.4f}")
-    print(f"  Mean (normalized): {stats.get('mean_normalized_mae', 0):.4f}")
+    print(f"  Mean:   {stats.get('mean_ta_rbo', 0):.4f}")
+    print(f"  Std:    {stats.get('std_ta_rbo', 0):.4f}")
+    print(f"  Median: {stats.get('median_ta_rbo', 0):.4f}")
+    print(f"  Range:  [{stats.get('min_ta_rbo', 0):.4f}, {stats.get('max_ta_rbo', 0):.4f}]")
+
+    print("\n--- RBO Scores (Threshold Tie-Aware) ---")
+    print(f"  Mean:   {stats.get('mean_tta_rbo', 0):.4f}")
+    print(f"  Std:    {stats.get('std_tta_rbo', 0):.4f}")
+    print(f"  Median: {stats.get('median_tta_rbo', 0):.4f}")
+    print(f"  Range:  [{stats.get('min_tta_rbo', 0):.4f}, {stats.get('max_tta_rbo', 0):.4f}]")
     
     print("\n--- Interpretation ---")
-    mean_rbo = stats.get('mean_rbo_with_ties', 0)
-    mean_icc = stats.get('mean_icc', 0)
-    mean_pearson = stats.get('mean_pearson', 0)
+    mean_rbo = stats.get('mean_ta_rbo', 0)
     
     # RBO interpretation
     if mean_rbo >= 0.9:
@@ -1034,29 +1033,7 @@ def print_numerical_experiment_summary(results: ExperimentINumericalResults) -> 
     else:
         rbo_interp = "Poor"
     
-    # ICC interpretation (Cicchetti 1994)
-    if mean_icc >= 0.75:
-        icc_interp = "Excellent"
-    elif mean_icc >= 0.60:
-        icc_interp = "Good"
-    elif mean_icc >= 0.40:
-        icc_interp = "Fair"
-    else:
-        icc_interp = "Poor"
-    
-    # Pearson interpretation
-    if abs(mean_pearson) >= 0.7:
-        pearson_interp = "Strong"
-    elif abs(mean_pearson) >= 0.4:
-        pearson_interp = "Moderate"
-    elif abs(mean_pearson) >= 0.2:
-        pearson_interp = "Weak"
-    else:
-        pearson_interp = "Negligible"
-    
     print(f"  RBO alignment:      {rbo_interp} ({mean_rbo:.4f})")
-    print(f"  ICC reliability:    {icc_interp} ({mean_icc:.4f})")
-    print(f"  Pearson correlation: {pearson_interp} ({mean_pearson:.4f})")
     
     print("\n" + "=" * 80)
 
@@ -1071,10 +1048,8 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
                               s_pot         s_fid      fig_lit_avg  entity_action_avg
     --------------------------------------------------------------------------------
     RBO (Standard)            0.xxxx        0.xxxx        0.xxxx
-    RBO (Tie-Aware)           0.xxxx        0.xxxx        0.xxxx
-    ICC                       0.xxxx        0.xxxx        0.xxxx
-    Pearson r                 0.xxxx        0.xxxx        0.xxxx
-    MAE (normalized)          0.xxxx        0.xxxx        0.xxxx
+    TA-RBO                    0.xxxx        0.xxxx        0.xxxx
+    TTA-RBO                   0.xxxx        0.xxxx        0.xxxx
     ================================================================================
     
     Args:
@@ -1087,6 +1062,10 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
     print(f"RBO Parameter (p): {results.rbo_p}")
     print(f"Timestamp: {results.timestamp}")
     print(f"Scoring Weights: {results.scoring_weights}")
+    if results.krippendorff_alpha is None:
+        print("Krippendorff's Alpha (ordinal): N/A")
+    else:
+        print(f"Krippendorff's Alpha (ordinal): {results.krippendorff_alpha:.4f}")
     
     # Get score types in order
     score_types = list(SCORE_TYPES.keys())
@@ -1116,11 +1095,8 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
     # Metric rows
     metrics = [
         ("RBO (Standard)", "mean_rbo_standard"),
-        ("RBO (Tie-Aware)", "mean_rbo_with_ties"),
-        ("ICC", "mean_icc"),
-        ("Pearson r", "mean_pearson"),
-        ("MAE (raw)", "mean_mae"),
-        ("MAE (normalized)", "mean_normalized_mae"),
+        ("TA-RBO", "mean_ta_rbo"),
+        ("TTA-RBO", "mean_tta_rbo"),
     ]
     
     for metric_name, stat_key in metrics:
@@ -1136,9 +1112,8 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
     # Find best score type for each metric
     print("\n--- Best Score Type by Metric ---")
     
-    # For RBO/ICC/Pearson, higher is better
-    # For MAE, lower is better
-    higher_is_better = ["mean_rbo_standard", "mean_rbo_with_ties", "mean_icc", "mean_pearson"]
+    # For all selected RBO metrics, higher is better.
+    higher_is_better = ["mean_rbo_standard", "mean_ta_rbo", "mean_tta_rbo"]
     
     for metric_name, stat_key in metrics:
         values = {
@@ -1156,16 +1131,14 @@ def print_multi_score_comparison(results: MultiScoreResults) -> None:
     # Overall interpretation
     print("\n--- Overall Interpretation ---")
     
-    # Average across key metrics (RBO tie-aware, ICC, Pearson)
+    # Average across key RBO metrics.
     score_rankings: Dict[str, float] = {}
     for score_type in score_types:
         stats = results.results_by_score_type[score_type].aggregate_stats
-        # Weighted combination (normalize MAE by inverting)
         combined = (
-            stats.get("mean_rbo_with_ties", 0.0) * 0.3 +
-            stats.get("mean_icc", 0.0) * 0.3 +
-            stats.get("mean_pearson", 0.0) * 0.3 +
-            (1.0 - stats.get("mean_normalized_mae", 0.0)) * 0.1
+            stats.get("mean_rbo_standard", 0.0) * 0.34 +
+            stats.get("mean_ta_rbo", 0.0) * 0.33 +
+            stats.get("mean_tta_rbo", 0.0) * 0.33
         )
         score_rankings[score_type] = combined
     
@@ -1208,10 +1181,8 @@ def generate_multi_score_latex_table(results: MultiScoreResults) -> str:
     
     metrics = [
         ("RBO (Standard)", "mean_rbo_standard"),
-        ("RBO (Tie-Aware)", "mean_rbo_with_ties"),
-        ("ICC", "mean_icc"),
-        ("Pearson $r$", "mean_pearson"),
-        ("MAE (normalized)", "mean_normalized_mae"),
+        ("TA-RBO", "mean_ta_rbo"),
+        ("TTA-RBO", "mean_tta_rbo"),
     ]
     
     for metric_name, stat_key in metrics:
@@ -1493,9 +1464,20 @@ if __name__ == "__main__":
         help="Limit number of idioms to process"
     )
     parser.add_argument(
+        "--idiom-ids",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Specific idiom IDs to process. Supports both "
+            "'--idiom-ids 1 2 3' and '--idiom-ids 1,2,3'. "
+            "When set, it overrides --limit."
+        ),
+    )
+    parser.add_argument(
         "--numerical", "-n",
         action="store_true",
-        help="Use numerical scoring (new system with ICC, Pearson, MAE)"
+        help="Use numerical scoring (RBO, TA-RBO, TTA-RBO with Krippendorff alpha)"
     )
     parser.add_argument(
         "--multi-score", "-M",
@@ -1509,9 +1491,18 @@ if __name__ == "__main__":
     config = ExperimentConfig(rbo_p=args.rbo_p)
     
     # Get idiom IDs
-    idiom_ids = discover_idioms()
-    if args.limit:
-        idiom_ids = idiom_ids[:args.limit]
+    if args.idiom_ids:
+        parsed_ids: List[int] = []
+        for raw in args.idiom_ids:
+            for token in raw.split(","):
+                token = token.strip()
+                if token:
+                    parsed_ids.append(int(token))
+        idiom_ids = parsed_ids
+    else:
+        idiom_ids = discover_idioms()
+        if args.limit:
+            idiom_ids = idiom_ids[:args.limit]
     
     # Determine which models to evaluate
     available_models = list_available_models()
