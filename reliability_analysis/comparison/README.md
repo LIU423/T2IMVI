@@ -80,3 +80,32 @@ python reliability_analysis/comparison/time_per_image_comparison.py \
 Output:
 
 `data/reliability_analysis/comparison/timing_experiment/<model_dir>/idiom_<id>/time_per_image_comparison_report.json`
+
+## Quadrant-Style Strategy vs T2IMVI Comparison
+
+Compare
+
+- `data/reliability_analysis/comparison/<strategy>/<model_dir>`
+- `data/output/IRFL/<model_dir>_T2IMVI`
+
+with the same quadrant-style aggregation idea used in
+`reliability_analysis/quadrant_analysis/run_quadrant_analysis.py`:
+
+```bash
+python reliability_analysis/comparison/quadrant_strategy_comparison.py \
+  --strategy direct_vlm_scoring_baseline \
+  --model-dir qwen3_vl_2b
+```
+
+Example for a specific idiom subset:
+
+```bash
+python reliability_analysis/comparison/quadrant_strategy_comparison.py \
+  --strategy direct_vlm_scoring_baseline \
+  --model-dir qwen3_vl_2b \
+  --idiom-ids 1 43 489
+```
+
+Output JSON is saved to:
+
+`data/reliability_analysis/results/comparison_quadrant_analysis/`
