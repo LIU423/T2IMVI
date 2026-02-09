@@ -97,12 +97,49 @@ python reliability_analysis/comparison/quadrant_strategy_comparison.py \
   --model-dir qwen3_vl_2b
 ```
 
+该比较脚本支持“1 对 4”模式：
+
+- comparison（direct baseline）使用 1 个分数（默认 `figurative_score`）
+- T2IMVI 使用 4 个分数（默认 `s_pot,s_fid,entity_action_avg,fig_lit_avg`）
+
+对 direct baseline，comparison 侧建议使用 `figurative_score`（即 direct 总分）：
+
+```bash
+--comparison-score-field figurative_score
+```
+
+T2IMVI 侧四个分数可配置：
+
+```bash
+--t2imvi-score-fields s_pot,s_fid,entity_action_avg,fig_lit_avg
+```
+
+默认终端输出为直观并排分数（`comparison / T2IMVI`），不是差值。
+如需额外显示差值，再加：
+
+```bash
+--show-delta
+```
+
+新增 RBO 指标（可配置阈值）：
+
+- 先把 IRFL 人类总分 `<= 阈值` 置为 `0`
+- 再按 tie-aware 逻辑计算 RBO（输出列 `RBO_tie<=thr(c/t)`）
+
+默认阈值是 `10`，可改为 `5`、`15` 等：
+
+```bash
+--low-score-zero-threshold 10
+```
+
 Example for a specific idiom subset:
 
 ```bash
 python reliability_analysis/comparison/quadrant_strategy_comparison.py \
   --strategy direct_vlm_scoring_baseline \
   --model-dir qwen3_vl_2b \
+  --comparison-score-field figurative_score \
+  --t2imvi-score-fields s_pot,s_fid,entity_action_avg,fig_lit_avg \
   --idiom-ids 1 43 489
 ```
 

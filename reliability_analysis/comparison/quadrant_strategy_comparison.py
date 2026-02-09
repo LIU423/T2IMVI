@@ -9,6 +9,7 @@ but reports side-by-side aggregates for:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import logging
 import statistics
@@ -109,6 +110,7 @@ class ScoreAggregate:
     n_idioms: int
     mean_rbo_standard: float
     mean_rbo_tie_aware: float
+    mean_rbo_tie_aware_low_score_as_zero: float
     mean_icc: float
     mean_pearson_r: float
     mean_mae: float
@@ -133,10 +135,36 @@ class QuadrantDelta:
     n_overlap_idioms: int
     delta_rbo_standard: float
     delta_rbo_tie_aware: float
+    delta_rbo_tie_aware_low_score_as_zero: float
     delta_icc: float
     delta_pearson_r: float
     delta_mae: float
     delta_normalized_mae: float
+
+
+@dataclass
+class ScoreSideBySide:
+    quadrant: str
+    comparison_score_field: str
+    comparison_score_label: str
+    t2imvi_score_field: str
+    t2imvi_score_label: str
+    comparison_n_idioms: int
+    t2imvi_n_idioms: int
+    comparison_rbo_standard: float
+    t2imvi_rbo_standard: float
+    comparison_rbo_tie_aware: float
+    t2imvi_rbo_tie_aware: float
+    comparison_rbo_tie_aware_low_score_as_zero: float
+    t2imvi_rbo_tie_aware_low_score_as_zero: float
+    comparison_icc: float
+    t2imvi_icc: float
+    comparison_pearson_r: float
+    t2imvi_pearson_r: float
+    comparison_mae: float
+    t2imvi_mae: float
+    comparison_normalized_mae: float
+    t2imvi_normalized_mae: float
 
 
 @dataclass
@@ -148,10 +176,13 @@ class ComparisonResults:
     t2imvi_model_path: str
     quadrant_anchor: str
     thresholds: Dict[str, float]
+    low_score_zero_threshold: Optional[int]
     rbo_p: float
-    score_fields: List[str]
+    comparison_score_field: str
+    t2imvi_score_fields: List[str]
     idiom_quadrants: List[Dict[str, object]]
     model_summaries: List[QuadrantModelSummary]
+    side_by_side_scores: List[ScoreSideBySide]
     deltas_comparison_minus_t2imvi: List[QuadrantDelta]
 
 
@@ -160,9 +191,11 @@ def _aggregate_group(
     idiom_ids: List[int],
     score_field: str,
     rbo_p: float,
+    low_score_zero_threshold: Optional[int],
 ) -> ScoreAggregate:
     rbo_std_vals: List[float] = []
     rbo_tie_vals: List[float] = []
+    rbo_tie_low_vals: List[float] = []
     icc_vals: List[float] = []
     pearson_vals: List[float] = []
     mae_vals: List[float] = []
@@ -179,11 +212,13 @@ def _aggregate_group(
             score_field=score_field,
             rbo_p=rbo_p,
             scoring_config=DEFAULT_SCORING_CONFIG,
+            low_score_zero_threshold=low_score_zero_threshold,
         )
         if result is None:
             continue
         rbo_std_vals.append(result.rbo_standard)
         rbo_tie_vals.append(result.rbo_with_ties)
+        rbo_tie_low_vals.append(result.rbo_with_ties_low_score_as_zero)
         icc_vals.append(result.icc)
         pearson_vals.append(result.pearson_r)
         mae_vals.append(result.mae)
@@ -195,6 +230,7 @@ def _aggregate_group(
         n_idioms=len(rbo_std_vals),
         mean_rbo_standard=_mean_or_zero(rbo_std_vals),
         mean_rbo_tie_aware=_mean_or_zero(rbo_tie_vals),
+        mean_rbo_tie_aware_low_score_as_zero=_mean_or_zero(rbo_tie_low_vals),
         mean_icc=_mean_or_zero(icc_vals),
         mean_pearson_r=_mean_or_zero(pearson_vals),
         mean_mae=_mean_or_zero(mae_vals),
@@ -209,8 +245,10 @@ def run_comparison(
     idiom_ids: Optional[List[int]],
     transparency_threshold: float,
     imageability_threshold: float,
+    low_score_zero_threshold: Optional[int],
     rbo_p: float,
-    score_fields: List[str],
+    comparison_score_field: str,
+    t2imvi_score_fields: List[str],
     quadrant_anchor: str,
     save_results: bool,
     results_dir: Optional[Path],
@@ -270,15 +308,27 @@ def run_comparison(
 
     model_summaries: List[QuadrantModelSummary] = []
     delta_rows: List[QuadrantDelta] = []
+    side_by_side_rows: List[ScoreSideBySide] = []
     quadrants = ["Q1_highT_highI", "Q2_highT_lowI", "Q3_lowT_highI", "Q4_lowT_lowI"]
 
     for quadrant in quadrants:
         members = groups[quadrant]
-        comparison_fields = [
-            _aggregate_group(comparison_key, members, score_field, rbo_p) for score_field in score_fields
-        ]
+        comparison_agg = _aggregate_group(
+            comparison_key,
+            members,
+            comparison_score_field,
+            rbo_p,
+            low_score_zero_threshold,
+        )
         t2imvi_fields = [
-            _aggregate_group(t2imvi_key, members, score_field, rbo_p) for score_field in score_fields
+            _aggregate_group(
+                t2imvi_key,
+                members,
+                score_field,
+                rbo_p,
+                low_score_zero_threshold,
+            )
+            for score_field in t2imvi_score_fields
         ]
 
         model_summaries.append(
@@ -288,7 +338,7 @@ def run_comparison(
                 model_key=comparison_key,
                 n_idioms=len(members),
                 idiom_ids=members,
-                score_field_results=comparison_fields,
+                score_field_results=[comparison_agg],
             )
         )
         model_summaries.append(
@@ -303,21 +353,51 @@ def run_comparison(
         )
 
         by_score_t2imvi = {x.score_field: x for x in t2imvi_fields}
-        for comp in comparison_fields:
-            ref = by_score_t2imvi[comp.score_field]
-            n_overlap = min(comp.n_idioms, ref.n_idioms)
+        for t2_row in t2imvi_fields:
+            n_overlap = min(comparison_agg.n_idioms, t2_row.n_idioms)
+            side_by_side_rows.append(
+                ScoreSideBySide(
+                    quadrant=quadrant,
+                    comparison_score_field=comparison_agg.score_field,
+                    comparison_score_label=comparison_agg.score_label,
+                    t2imvi_score_field=t2_row.score_field,
+                    t2imvi_score_label=t2_row.score_label,
+                    comparison_n_idioms=comparison_agg.n_idioms,
+                    t2imvi_n_idioms=t2_row.n_idioms,
+                    comparison_rbo_standard=comparison_agg.mean_rbo_standard,
+                    t2imvi_rbo_standard=t2_row.mean_rbo_standard,
+                    comparison_rbo_tie_aware=comparison_agg.mean_rbo_tie_aware,
+                    t2imvi_rbo_tie_aware=t2_row.mean_rbo_tie_aware,
+                    comparison_rbo_tie_aware_low_score_as_zero=comparison_agg.mean_rbo_tie_aware_low_score_as_zero,
+                    t2imvi_rbo_tie_aware_low_score_as_zero=t2_row.mean_rbo_tie_aware_low_score_as_zero,
+                    comparison_icc=comparison_agg.mean_icc,
+                    t2imvi_icc=t2_row.mean_icc,
+                    comparison_pearson_r=comparison_agg.mean_pearson_r,
+                    t2imvi_pearson_r=t2_row.mean_pearson_r,
+                    comparison_mae=comparison_agg.mean_mae,
+                    t2imvi_mae=t2_row.mean_mae,
+                    comparison_normalized_mae=comparison_agg.mean_normalized_mae,
+                    t2imvi_normalized_mae=t2_row.mean_normalized_mae,
+                )
+            )
             delta_rows.append(
                 QuadrantDelta(
                     quadrant=quadrant,
-                    score_field=comp.score_field,
-                    score_label=comp.score_label,
+                    score_field=t2_row.score_field,
+                    score_label=t2_row.score_label,
                     n_overlap_idioms=n_overlap,
-                    delta_rbo_standard=comp.mean_rbo_standard - ref.mean_rbo_standard,
-                    delta_rbo_tie_aware=comp.mean_rbo_tie_aware - ref.mean_rbo_tie_aware,
-                    delta_icc=comp.mean_icc - ref.mean_icc,
-                    delta_pearson_r=comp.mean_pearson_r - ref.mean_pearson_r,
-                    delta_mae=comp.mean_mae - ref.mean_mae,
-                    delta_normalized_mae=comp.mean_normalized_mae - ref.mean_normalized_mae,
+                    delta_rbo_standard=comparison_agg.mean_rbo_standard - t2_row.mean_rbo_standard,
+                    delta_rbo_tie_aware=comparison_agg.mean_rbo_tie_aware - t2_row.mean_rbo_tie_aware,
+                    delta_rbo_tie_aware_low_score_as_zero=(
+                        comparison_agg.mean_rbo_tie_aware_low_score_as_zero
+                        - t2_row.mean_rbo_tie_aware_low_score_as_zero
+                    ),
+                    delta_icc=comparison_agg.mean_icc - t2_row.mean_icc,
+                    delta_pearson_r=comparison_agg.mean_pearson_r - t2_row.mean_pearson_r,
+                    delta_mae=comparison_agg.mean_mae - t2_row.mean_mae,
+                    delta_normalized_mae=(
+                        comparison_agg.mean_normalized_mae - t2_row.mean_normalized_mae
+                    ),
                 )
             )
 
@@ -332,10 +412,13 @@ def run_comparison(
             "transparency": transparency_threshold,
             "imageability": imageability_threshold,
         },
+        low_score_zero_threshold=low_score_zero_threshold,
         rbo_p=rbo_p,
-        score_fields=score_fields,
+        comparison_score_field=comparison_score_field,
+        t2imvi_score_fields=t2imvi_score_fields,
         idiom_quadrants=idiom_quadrants,
         model_summaries=model_summaries,
+        side_by_side_scores=side_by_side_rows,
         deltas_comparison_minus_t2imvi=delta_rows,
     )
 
@@ -354,7 +437,7 @@ def run_comparison(
     return results
 
 
-def _print_summary(results: ComparisonResults) -> None:
+def _print_summary(results: ComparisonResults, show_delta: bool = False) -> None:
     print("\n" + "=" * 98)
     print("Quadrant Comparison: comparison strategy vs T2IMVI")
     print("=" * 98)
@@ -365,14 +448,125 @@ def _print_summary(results: ComparisonResults) -> None:
         f"Thresholds: transparency={results.thresholds['transparency']}, "
         f"imageability={results.thresholds['imageability']} | anchor={results.quadrant_anchor}"
     )
+    print(f"Comparison score field: {results.comparison_score_field}")
+    print(f"T2IMVI score fields: {','.join(results.t2imvi_score_fields)}")
+    print(f"Low-score collapse threshold (for tie-aware RBO variant): {results.low_score_zero_threshold}")
     print(f"RBO p: {results.rbo_p}")
 
-    for delta in results.deltas_comparison_minus_t2imvi:
+    quadrants = ["Q1_highT_highI", "Q2_highT_lowI", "Q3_lowT_highI", "Q4_lowT_lowI"]
+    for quadrant in quadrants:
+        rows = [x for x in results.side_by_side_scores if x.quadrant == quadrant]
+        if not rows:
+            continue
+        row = rows[0]
+        has_data = row.comparison_n_idioms > 0 or row.t2imvi_n_idioms > 0
+        if not has_data:
+            continue
+        print("\n" + "-" * 98)
+        print(f"{quadrant}")
         print(
-            f"{delta.quadrant:>14} | {delta.score_label:<18} | n={delta.n_overlap_idioms:>3d} "
-            f"| dRBO={delta.delta_rbo_standard:+.4f} dRBO_tie={delta.delta_rbo_tie_aware:+.4f} "
-            f"dICC={delta.delta_icc:+.4f} dPearson={delta.delta_pearson_r:+.4f} dMAE={delta.delta_mae:+.4f}"
+            f"{'T2IMVI score':<18} {'n(c/t)':>8} {'RBO(c/t)':>20} {'RBO_tie(c/t)':>20} "
+            f"{'RBO_tie<=thr(c/t)':>22} {'ICC(c/t)':>18} {'MAE(c/t)':>18}"
         )
+        print("-" * 98)
+        for row in rows:
+            print(
+                f"{row.t2imvi_score_label:<18} "
+                f"{row.comparison_n_idioms:>3d}/{row.t2imvi_n_idioms:<3d} "
+                f"{row.comparison_rbo_standard:>9.4f}/{row.t2imvi_rbo_standard:<9.4f} "
+                f"{row.comparison_rbo_tie_aware:>9.4f}/{row.t2imvi_rbo_tie_aware:<9.4f} "
+                f"{row.comparison_rbo_tie_aware_low_score_as_zero:>9.4f}/"
+                f"{row.t2imvi_rbo_tie_aware_low_score_as_zero:<9.4f} "
+                f"{row.comparison_icc:>8.4f}/{row.t2imvi_icc:<8.4f} "
+                f"{row.comparison_mae:>8.4f}/{row.t2imvi_mae:<8.4f}"
+            )
+
+    if show_delta:
+        print("\n" + "=" * 98)
+        print("Delta (comparison - T2IMVI)")
+        print("=" * 98)
+        for delta in results.deltas_comparison_minus_t2imvi:
+            print(
+                f"{delta.quadrant:>14} | {delta.score_label:<18} | n={delta.n_overlap_idioms:>3d} "
+                f"| dRBO={delta.delta_rbo_standard:+.4f} dRBO_tie={delta.delta_rbo_tie_aware:+.4f} "
+                f"dRBO_tie<=thr={delta.delta_rbo_tie_aware_low_score_as_zero:+.4f} "
+                f"dICC={delta.delta_icc:+.4f} dPearson={delta.delta_pearson_r:+.4f} dMAE={delta.delta_mae:+.4f}"
+            )
+
+
+def _write_csv(results: ComparisonResults, csv_output: Path) -> None:
+    csv_output.parent.mkdir(parents=True, exist_ok=True)
+    with csv_output.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "strategy",
+                "model_dir",
+                "comparison_score_field",
+                "t2imvi_score_field",
+                "t2imvi_score_label",
+                "quadrant",
+                "comparison_n_idioms",
+                "t2imvi_n_idioms",
+                "comparison_rbo_standard",
+                "t2imvi_rbo_standard",
+                "comparison_rbo_tie_aware",
+                "t2imvi_rbo_tie_aware",
+                "comparison_rbo_tie_aware_low_score_as_zero",
+                "t2imvi_rbo_tie_aware_low_score_as_zero",
+                "comparison_icc",
+                "t2imvi_icc",
+                "comparison_pearson_r",
+                "t2imvi_pearson_r",
+                "comparison_mae",
+                "t2imvi_mae",
+                "comparison_normalized_mae",
+                "t2imvi_normalized_mae",
+                "delta_rbo_standard",
+                "delta_rbo_tie_aware",
+                "delta_rbo_tie_aware_low_score_as_zero",
+                "delta_icc",
+                "delta_pearson_r",
+                "delta_mae",
+                "delta_normalized_mae",
+            ]
+        )
+        delta_map = {(d.quadrant, d.score_field): d for d in results.deltas_comparison_minus_t2imvi}
+        for row in results.side_by_side_scores:
+            delta = delta_map.get((row.quadrant, row.t2imvi_score_field))
+            writer.writerow(
+                [
+                    results.strategy,
+                    results.model_dir,
+                    row.comparison_score_field,
+                    row.t2imvi_score_field,
+                    row.t2imvi_score_label,
+                    row.quadrant,
+                    row.comparison_n_idioms,
+                    row.t2imvi_n_idioms,
+                    row.comparison_rbo_standard,
+                    row.t2imvi_rbo_standard,
+                    row.comparison_rbo_tie_aware,
+                    row.t2imvi_rbo_tie_aware,
+                    row.comparison_rbo_tie_aware_low_score_as_zero,
+                    row.t2imvi_rbo_tie_aware_low_score_as_zero,
+                    row.comparison_icc,
+                    row.t2imvi_icc,
+                    row.comparison_pearson_r,
+                    row.t2imvi_pearson_r,
+                    row.comparison_mae,
+                    row.t2imvi_mae,
+                    row.comparison_normalized_mae,
+                    row.t2imvi_normalized_mae,
+                    delta.delta_rbo_standard if delta else "",
+                    delta.delta_rbo_tie_aware if delta else "",
+                    delta.delta_rbo_tie_aware_low_score_as_zero if delta else "",
+                    delta.delta_icc if delta else "",
+                    delta.delta_pearson_r if delta else "",
+                    delta.delta_mae if delta else "",
+                    delta.delta_normalized_mae if delta else "",
+                ]
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -396,12 +590,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--transparency-threshold", type=float, default=0.5)
     parser.add_argument("--imageability-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--low-score-zero-threshold",
+        type=int,
+        default=10,
+        help="Human total scores <= threshold are collapsed to 0 for an extra tie-aware RBO metric.",
+    )
     parser.add_argument("--rbo-p", type=float, default=DEFAULT_EXPERIMENT_CONFIG.rbo_p)
     parser.add_argument(
-        "--score-fields",
+        "--comparison-score-field",
+        type=str,
+        default="figurative_score",
+        help="Score field used on comparison side (direct baseline). Default: figurative_score",
+    )
+    parser.add_argument(
+        "--t2imvi-score-fields",
         type=str,
         default=",".join(DEFAULT_SCORE_FIELDS),
-        help="Comma-separated score fields. Default: s_pot,s_fid,entity_action_avg,fig_lit_avg",
+        help="Comma-separated T2IMVI score fields. Default: s_pot,s_fid,entity_action_avg,fig_lit_avg",
     )
     parser.add_argument(
         "--quadrant-anchor",
@@ -409,6 +615,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["t2imvi", "comparison"],
         default="t2imvi",
         help="Which side provides idiom-level transparency/imageability for quadrant assignment.",
+    )
+    parser.add_argument("--show-delta", action="store_true", help="Also print delta (comparison - T2IMVI).")
+    parser.add_argument(
+        "--csv-output",
+        type=Path,
+        default=None,
+        help="Optional CSV export path for side-by-side comparison rows.",
     )
     parser.add_argument("--no-save", action="store_true", help="Do not save JSON result.")
     return parser
@@ -419,7 +632,8 @@ def main() -> None:
     args = parser.parse_args()
 
     idiom_ids = _parse_idiom_ids(args.idiom_ids)
-    score_fields = [x.strip() for x in args.score_fields.split(",") if x.strip()]
+    comparison_score_field = args.comparison_score_field.strip()
+    t2imvi_score_fields = [x.strip() for x in args.t2imvi_score_fields.split(",") if x.strip()]
 
     results = run_comparison(
         strategy=args.strategy,
@@ -428,13 +642,18 @@ def main() -> None:
         idiom_ids=idiom_ids,
         transparency_threshold=args.transparency_threshold,
         imageability_threshold=args.imageability_threshold,
+        low_score_zero_threshold=args.low_score_zero_threshold,
         rbo_p=args.rbo_p,
-        score_fields=score_fields,
+        comparison_score_field=comparison_score_field,
+        t2imvi_score_fields=t2imvi_score_fields,
         quadrant_anchor=args.quadrant_anchor,
         save_results=not args.no_save,
         results_dir=None,
     )
-    _print_summary(results)
+    _print_summary(results, show_delta=args.show_delta)
+    if args.csv_output is not None:
+        _write_csv(results, args.csv_output)
+        print(f"\nCSV saved: {args.csv_output}")
 
 
 if __name__ == "__main__":

@@ -162,6 +162,7 @@ class IdiomNumericalRankingResult:
     # RBO metrics
     rbo_standard: float
     rbo_with_ties: float
+    rbo_with_ties_low_score_as_zero: float
     
     # Correlation metrics
     icc: float
@@ -324,6 +325,7 @@ def compare_rankings_numerical(
     score_field: str = "figurative_score",
     rbo_p: float = 0.9,
     scoring_config: ScoringConfig = DEFAULT_SCORING_CONFIG,
+    low_score_zero_threshold: Optional[int] = None,
 ) -> Optional[IdiomNumericalRankingResult]:
     """Compare model ranking against human ranking using numerical scoring.
     
@@ -340,6 +342,9 @@ def compare_rankings_numerical(
         score_field: Which score field for ranking
         rbo_p: RBO persistence parameter
         scoring_config: Configuration for annotation weights
+        low_score_zero_threshold:
+            If set, human scores <= threshold are collapsed to 0 before
+            tie-aware RBO is computed for the additional metric.
         
     Returns:
         IdiomNumericalRankingResult if successful, None if insufficient data
@@ -412,6 +417,29 @@ def compare_rankings_numerical(
         tie_groups, 
         rbo_p
     )
+    rbo_ties_low_score_as_zero = rbo_ties
+    if low_score_zero_threshold is not None:
+        adjusted_score_to_images: Dict[int, List[int]] = {}
+        for image_id in human_ranked.ranked_image_ids:
+            raw_score = int(human_ranked.image_scores.get(image_id, 0))
+            adjusted_score = 0 if raw_score <= low_score_zero_threshold else raw_score
+            if adjusted_score not in adjusted_score_to_images:
+                adjusted_score_to_images[adjusted_score] = []
+            adjusted_score_to_images[adjusted_score].append(image_id)
+
+        adjusted_ranked_ids: List[int] = []
+        adjusted_tie_groups: List[Tuple[int, List[int]]] = []
+        for score in sorted(adjusted_score_to_images.keys(), reverse=True):
+            image_ids = sorted(adjusted_score_to_images[score])
+            adjusted_ranked_ids.extend(image_ids)
+            adjusted_tie_groups.append((score, image_ids))
+
+        rbo_ties_low_score_as_zero = rbo_with_ties(
+            adjusted_ranked_ids,
+            model_ranking_ids,
+            adjusted_tie_groups,
+            rbo_p,
+        )
     
     icc_value = icc_from_pairs(human_scores, model_scores, "ICC(2,1)")
     pearson_value = pearson_correlation(human_scores, model_scores)
@@ -428,6 +456,7 @@ def compare_rankings_numerical(
         score_field=score_field,
         rbo_standard=rbo_standard,
         rbo_with_ties=rbo_ties,
+        rbo_with_ties_low_score_as_zero=rbo_ties_low_score_as_zero,
         icc=icc_value,
         pearson_r=pearson_value,
         mae=mae_raw,
@@ -688,6 +717,7 @@ def calculate_aggregate_stats_numerical(
             "total_images": 0,
             "mean_rbo_standard": 0.0,
             "mean_rbo_with_ties": 0.0,
+            "mean_rbo_with_ties_low_score_as_zero": 0.0,
             "mean_icc": 0.0,
             "mean_pearson": 0.0,
             "mean_mae": 0.0,
@@ -697,6 +727,7 @@ def calculate_aggregate_stats_numerical(
     # Extract metrics lists
     rbo_standard = [r.rbo_standard for r in idiom_results]
     rbo_ties = [r.rbo_with_ties for r in idiom_results]
+    rbo_ties_low_score_as_zero = [r.rbo_with_ties_low_score_as_zero for r in idiom_results]
     icc_vals = [r.icc for r in idiom_results]
     pearson_vals = [r.pearson_r for r in idiom_results]
     mae_vals = [r.mae for r in idiom_results]
@@ -723,6 +754,13 @@ def calculate_aggregate_stats_numerical(
         "min_rbo_with_ties": min(rbo_ties),
         "max_rbo_with_ties": max(rbo_ties),
         "median_rbo_with_ties": statistics.median(rbo_ties),
+        "mean_rbo_with_ties_low_score_as_zero": statistics.mean(rbo_ties_low_score_as_zero),
+        "std_rbo_with_ties_low_score_as_zero": (
+            statistics.stdev(rbo_ties_low_score_as_zero) if len(rbo_ties_low_score_as_zero) > 1 else 0.0
+        ),
+        "min_rbo_with_ties_low_score_as_zero": min(rbo_ties_low_score_as_zero),
+        "max_rbo_with_ties_low_score_as_zero": max(rbo_ties_low_score_as_zero),
+        "median_rbo_with_ties_low_score_as_zero": statistics.median(rbo_ties_low_score_as_zero),
         
         # ICC
         "mean_icc": statistics.mean(icc_vals),
